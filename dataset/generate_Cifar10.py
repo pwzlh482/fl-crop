@@ -35,8 +35,6 @@ def generate_dataset(dir_path, num_clients, niid, balance, partition):
         root=dir_path+"rawdata", train=True, download=True, transform=transform)
     testset = torchvision.datasets.CIFAR10(
         root=dir_path+"rawdata", train=False, download=True, transform=transform)
-    #trainset = torchvision.datasets.CIFAR10(root="~/.cache/torch/hub/datasets/", train=True, download=True, transform=transform)
-    #testset = torchvision.datasets.CIFAR10(root="~/.cache/torch/hub/datasets/", train=False, download=True, transform=transform)
     trainloader = torch.utils.data.DataLoader(
         trainset, batch_size=len(trainset.data), shuffle=False)
     testloader = torch.utils.data.DataLoader(
@@ -73,8 +71,8 @@ def generate_dataset(dir_path, num_clients, niid, balance, partition):
 
 
 if __name__ == "__main__":
-    #niid = True if sys.argv[1] == "noniid" else False
-    #balance = True if sys.argv[2] == "balance" else False
-    #partition = sys.argv[3] if sys.argv[3] != "-" else None
+    niid = True if sys.argv[1] == "noniid" else False
+    balance = True if sys.argv[2] == "balance" else False
+    partition = sys.argv[3] if sys.argv[3] != "-" else None
 
-    generate_dataset(dir_path, num_clients, niid = True, balance = True, partition = 'dir')
+    generate_dataset(dir_path, num_clients, niid, balance, partition)
