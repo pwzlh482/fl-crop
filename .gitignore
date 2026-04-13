@@ -17,3 +17,17 @@ __pycache__/
 *.swp
 *.swo
 my_files.zip
+
+# 大文件：数据集、模型权重、结果（这些文件太大，不走git）
+*.npy
+*.npz
+*.tar.gz
+dataset/MNIST/
+dataset/Cifar10/
+dataset/crop_data/
+system/crop_data/
+system/saved_models/
+system/predict_images/
+results/
+models/
+items/
