@@ -5,7 +5,7 @@ clientProx V2 - FedProx 优化客户端
 优化点：
 1. Label Smoothing (0.1) 防止过拟合
 2. PerturbedGradientDescent1 替代原版 SGD，支持 momentum + weight_decay
-3. CosineAnnealingWarmRestarts 学习率调度（替代 MultiStepLR，收敛更平滑）
+3. MultiStepLR 学习率调度（与原版 FedProx 一致，前期高 lr 学得快）
 4. 梯度裁剪 max_norm=5.0 防止梯度爆炸
 5. 动态 mu 衰减 — 高 mu 抑制早期漂移，低 mu 释放后期个性化
 """
@@ -42,13 +42,13 @@ class clientProxV2(Client):
             weight_decay=self.weight_decay
         )
 
-        # 优化3: CosineAnnealingWarmRestarts 替代 MultiStepLR
-        # T_0=10 表示每10轮一个余弦周期，T_mult=2 表示周期翻倍
-        self.learning_rate_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        # 优化3: MultiStepLR（与原版 FedProx 一致，前期高 lr 学得快）
+        # 默认在第 40、60 轮衰减，可通过 -ldm 参数自定义
+        milestones = getattr(args, 'lr_decay_milestones', [40, 60])
+        self.learning_rate_scheduler = torch.optim.lr_scheduler.MultiStepLR(
             optimizer=self.optimizer,
-            T_0=10,
-            T_mult=2,
-            eta_min=self.learning_rate * 0.01
+            milestones=milestones,
+            gamma=args.learning_rate_decay_gamma
         )
 
         # 优化4: 梯度裁剪阈值
@@ -57,6 +57,9 @@ class clientProxV2(Client):
         # 优化5: 动态 mu 参数
         self.base_mu = args.mu
         self.current_round = 0
+
+        # 优化6: Mixup 数据增强
+        self.mixup_alpha = getattr(args, 'mixup_alpha', 0.2)
 
     def train(self):
         trainloader = self.load_train_data()
@@ -77,7 +80,19 @@ class clientProxV2(Client):
 
                 self.optimizer.zero_grad()
                 output = self.model(x)
-                loss = self.loss(output, y)
+
+                # Mixup 数据增强
+                if hasattr(self, 'mixup_alpha') and self.mixup_alpha > 0 and self.model.training:
+                    lam = np.random.beta(self.mixup_alpha, self.mixup_alpha)
+                    if lam > 1 - lam:
+                        lam = 1 - lam  # 确保 lam 较小
+                    batch_size = x.size(0)
+                    index = torch.randperm(batch_size, device=x.device)
+                    mixed_x = lam * x + (1 - lam) * x[index]
+                    mixed_output = self.model(mixed_x)
+                    loss = lam * self.loss(mixed_output, y) + (1 - lam) * self.loss(mixed_output, y[index])
+                else:
+                    loss = self.loss(output, y)
 
                 # FedProx 核心：手动添加近端项
                 if self.mu > 0:

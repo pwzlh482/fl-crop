@@ -723,8 +723,8 @@ def main():
                         help="Local learning rate")
     parser.add_argument('-ld', "--learning_rate_decay", type=bool, default=True)
     parser.add_argument('-ldg', "--learning_rate_decay_gamma", type=float, default=0.2)
-    parser.add_argument('-ldm', "--lr_decay_milestones", type=int, nargs='+', default=[20, 40],
-                        help="轮次节点，比如输入 80 120 表示在80、120轮衰减学习率")
+    parser.add_argument('-ldm', "--lr_decay_milestones", type=int, nargs='+', default=[40, 60],
+                        help="轮次节点，比如输入 40 60 表示在40、60轮衰减学习率")
     parser.add_argument('-gr', "--global_rounds", type=int, default=70)
     parser.add_argument('-tc', "--top_cnt", type=int, default=10,
                         help="For auto_break")
@@ -773,7 +773,7 @@ def main():
     parser.add_argument('-bt', "--beta", type=float, default=0.0)
     parser.add_argument('-lam', "--lamda", type=float, default=1.0,
                         help="Regularization weight")
-    parser.add_argument('-mu', "--mu", type=float, default=0.01)
+    parser.add_argument('-mu', "--mu", type=float, default=0.1)
     parser.add_argument('-K', "--K", type=int, default=5,
                         help="Number of personalized training steps for pFedMe")
     parser.add_argument('-lrp', "--p_learning_rate", type=float, default=0.01,
@@ -832,6 +832,8 @@ def main():
                         help="离线预训练权重路径")
     parser.add_argument('-mn', "--model_name", type=str, default="",
                         help="模型名称，用于保存文件命名")
+    parser.add_argument('-ma', "--mixup_alpha", type=float, default=0.2,
+                        help="Mixup 数据增强 alpha 值，0 表示关闭")
 
     args = parser.parse_args()
 
