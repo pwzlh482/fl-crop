@@ -96,14 +96,27 @@ def setup_device(args):
         args.multi_gpu = False
 
 
-def load_pretrained_resnet18(model, pretrained_path, num_classes):
-    """离线加载预训练ResNet18权重（不含fc层）"""
+def load_pretrained_weights(model, pretrained_path, skip_keys=('fc', 'classifier')):
+    """离线加载预训练权重（通用版，支持 ResNet18 / MobileNetV2 等）
+
+    自动处理：
+    - DataParallel 的 module. 前缀
+    - fc / classifier 层类别数不匹配时跳过
+    - 形状不匹配的层跳过（如 BN→GN 后参数形状变了）
+
+    Args:
+        model: 目标模型
+        pretrained_path: 预训练权重文件路径
+        skip_keys: 包含这些关键字的层如果形状不匹配则跳过（分类头）
+
+    Returns:
+        加载了预训练权重的模型（文件不存在则原样返回）
+    """
     if not os.path.exists(pretrained_path):
-        print(f"[警告] 预训练权重文件不存在: {pretrained_path}")
-        print("将使用随机初始化继续训练")
+        print(f"[预训练] 权重文件不存在: {pretrained_path}，使用随机初始化")
         return model
 
-    print(f"正在加载预训练权重: {pretrained_path}")
+    print(f"[预训练] 正在加载: {pretrained_path}")
     try:
         state_dict = torch.load(pretrained_path, map_location='cpu')
 
@@ -114,26 +127,79 @@ def load_pretrained_resnet18(model, pretrained_path, num_classes):
                 new_state_dict[k.replace('module.', '')] = v
             state_dict = new_state_dict
 
-        # 移除 fc 层的权重（类别数不同）
         model_dict = model.state_dict()
         loaded_count = 0
-        skipped_keys = []
+        skipped_mismatch = []
+        skipped_head = []
+
         for k, v in state_dict.items():
-            if k in model_dict and v.shape == model_dict[k].shape:
-                model_dict[k] = v
-                loaded_count += 1
-            elif 'fc' in k:
-                skipped_keys.append(k)
+            if k not in model_dict:
+                # 模型中不存在该层（结构变了），跳过
+                continue
+            if v.shape != model_dict[k].shape:
+                # 形状不匹配
+                if any(s in k for s in skip_keys):
+                    skipped_head.append(k)
+                else:
+                    skipped_mismatch.append(k)
+                continue
+            model_dict[k] = v
+            loaded_count += 1
 
         model.load_state_dict(model_dict)
-        print(f"成功加载 {loaded_count}/{len(model_dict)} 层权重")
-        if skipped_keys:
-            print(f"跳过fc层(类别数不匹配): {skipped_keys}")
+        print(f"[预训练] 成功加载 {loaded_count}/{len(model_dict)} 层权重")
+        if skipped_head:
+            print(f"[预训练] 跳过分类头(类别数不匹配): {skipped_head}")
+        if skipped_mismatch:
+            print(f"[预训练] 跳过形状不匹配层: {skipped_mismatch}")
     except Exception as e:
-        print(f"加载预训练权重失败: {e}")
-        print("将使用随机初始化继续训练")
+        print(f"[预训练] 加载失败: {e}，使用随机初始化")
 
     return model
+
+
+def auto_load_pretrained(model, model_name, args, skip_keys=('fc', 'classifier')):
+    """自动检测并加载预训练权重
+
+    优先级：
+    1. 命令行 -pp 指定的路径
+    2. system/ 目录下的默认文件:
+       - ResNet18  → resnet18_imagenet.pth
+       - MobileNet → mobilenet_v2_imagenet.pth
+
+    文件不存在则静默跳过，不影响原功能
+
+    Returns:
+        (model, bool): 模型 + 是否成功加载了预训练权重
+    """
+    # 默认预训练文件名映射
+    default_files = {
+        'ResNet18': 'resnet18_imagenet.pth',
+        'MobileNet': 'mobilenet_v2_imagenet.pth',
+        'ResNet34': 'resnet34_imagenet.pth',
+    }
+
+    pretrained_path = ""
+
+    # 优先使用命令行指定路径
+    if hasattr(args, 'pretrained_path') and args.pretrained_path:
+        pretrained_path = args.pretrained_path
+    # 否则自动检测默认文件
+    elif model_name in default_files:
+        auto_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), default_files[model_name])
+        if os.path.exists(auto_path):
+            pretrained_path = auto_path
+            print(f"[预训练] 自动检测到: {auto_path}")
+
+    if pretrained_path:
+        model = load_pretrained_weights(model, pretrained_path, skip_keys=skip_keys)
+        return True
+    else:
+        if model_name in default_files:
+            print(f"[预训练] 未找到 {default_files[model_name]}，使用随机初始化")
+        else:
+            print(f"[预训练] {model_name} 暂无自动预训练支持，使用随机初始化")
+        return False
 
 
 logger = logging.getLogger()
@@ -184,10 +250,14 @@ def run(args):
         elif model_str == "ResNet18":
             args.model = torchvision.models.resnet18(pretrained=False, num_classes=args.num_classes)
 
+            # ★ 1. 先修改第一层卷积 + 去掉 maxpool（与预训练权重兼容）
             args.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
             args.model.maxpool = nn.Identity()
 
-            # 替换 BN 为 GN (32 groups)
+            # ★ 2. 预训练权重在 BN→GN 替换之前加载，这样卷积权重能被保留
+            has_pretrained = auto_load_pretrained(args.model, 'ResNet18', args)
+
+            # ★ 3. 替换 BN 为 GN（替换后预训练的 BN 参数形状不匹配会被忽略）
             def replace_bn(module):
                 for name, child in module.named_children():
                     if isinstance(child, nn.BatchNorm2d):
@@ -197,22 +267,20 @@ def run(args):
 
             replace_bn(args.model)
 
-            # 初始化
+            # ★ 4. 初始化（只对 GN 和 fc 层做初始化，卷积层保留预训练值）
             for m in args.model.modules():
                 if isinstance(m, nn.Conv2d):
-                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    # 卷积层：如果没有预训练权重才用 kaiming 初始化
+                    if not has_pretrained:
+                        nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                     if m.bias is not None:
                         nn.init.constant_(m.bias, 0)
-                elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.GroupNorm):
+                elif isinstance(m, nn.GroupNorm):
                     nn.init.constant_(m.weight, 1)
                     nn.init.constant_(m.bias, 0)
                 elif isinstance(m, nn.Linear):
                     nn.init.normal_(m.weight, 0, 0.01)
                     nn.init.constant_(m.bias, 0)
-
-            # 离线加载预训练权重
-            if hasattr(args, 'pretrained_path') and args.pretrained_path:
-                args.model = load_pretrained_resnet18(args.model, args.pretrained_path, args.num_classes)
 
             # 增强数据增强（CIFAR-10 / Crop）
             if "Cifar10" in args.dataset or "crop" in args.dataset.lower():
@@ -252,7 +320,11 @@ def run(args):
         elif model_str == "MobileNet":
             args.model = models.mobilenet_v2(pretrained=False, num_classes=args.num_classes)
 
-            # 替换 BN 为 GN
+            # ★ 1. 预训练权重在 BN→GN 替换之前加载，卷积权重能被保留
+            has_pretrained = auto_load_pretrained(args.model, 'MobileNet', args,
+                                                  skip_keys=('fc', 'classifier'))
+
+            # ★ 2. 替换 BN 为 GN（替换后预训练的 BN 参数形状不匹配会被忽略，GN 用新初始化）
             def replace_bn(module):
                 for name, child in module.named_children():
                     if isinstance(child, nn.BatchNorm2d):
@@ -266,10 +338,11 @@ def run(args):
 
             replace_bn(args.model)
 
-            # 初始化
+            # ★ 3. 初始化（只对 GN 和 fc 层做初始化，卷积层保留预训练值）
             for m in args.model.modules():
                 if isinstance(m, nn.Conv2d):
-                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    if not has_pretrained:
+                        nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                     if m.bias is not None:
                         nn.init.constant_(m.bias, 0)
                 elif isinstance(m, nn.GroupNorm):
