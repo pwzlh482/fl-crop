@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from sklearn.preprocessing import label_binarize
 from sklearn import metrics
 from utils.data_utils import read_client_data
-
+from flcore.optimizers.fedoptimizer import PerturbedGradientDescent
 
 class Client(object):
     """
@@ -19,10 +19,14 @@ class Client(object):
         self.model = copy.deepcopy(args.model)
         self.algorithm = args.algorithm
         self.dataset = args.dataset
-        self.device = args.device
-        self.id = id  # integer
-        self.save_folder_name = args.save_folder_name
+        
+        self.id = id
+        # self.device = args.device 
+        self.device = args.client_device_map[self.id] 
+        self.model.to(self.device) 
 
+        self.save_folder_name = args.save_folder_name
+        self.mu = args.mu
         self.num_classes = args.num_classes
         self.train_samples = train_samples
         self.test_samples = test_samples
@@ -30,7 +34,7 @@ class Client(object):
         self.learning_rate = args.local_learning_rate
         self.local_epochs = args.local_epochs
         self.few_shot = args.few_shot
-
+        self.learning_rate_decay = args.learning_rate_decay
         # check BatchNorm
         self.has_BatchNorm = False
         for layer in self.model.children():
@@ -45,24 +49,37 @@ class Client(object):
 
         self.loss = nn.CrossEntropyLoss()
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.learning_rate)
+
+        """
         self.learning_rate_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             optimizer=self.optimizer, 
             gamma=args.learning_rate_decay_gamma
         )
-        self.learning_rate_decay = args.learning_rate_decay
+        
+        """
+        
+        # 引入 MultiStepLR
+        self.learning_rate_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer=self.optimizer, 
+            milestones=args.lr_decay_milestones, # 传入 [60, 120]
+            gamma=args.learning_rate_decay_gamma # 传入 0.1 或 0.5
+        )
+        
 
 
     def load_train_data(self, batch_size=None):
         if batch_size == None:
             batch_size = self.batch_size
         train_data = read_client_data(self.dataset, self.id, is_train=True, few_shot=self.few_shot)
-        return DataLoader(train_data, batch_size, drop_last=True, shuffle=True)
+        return DataLoader(train_data, batch_size, drop_last=True, shuffle=True,
+                          num_workers=4, pin_memory=True, persistent_workers=False)
 
     def load_test_data(self, batch_size=None):
         if batch_size == None:
             batch_size = self.batch_size
         test_data = read_client_data(self.dataset, self.id, is_train=False, few_shot=self.few_shot)
-        return DataLoader(test_data, batch_size, drop_last=False, shuffle=True)
+        return DataLoader(test_data, batch_size, drop_last=False, shuffle=True,
+                          num_workers=4, pin_memory=True)
         
     def set_parameters(self, model):
         for new_param, old_param in zip(model.parameters(), self.model.parameters()):

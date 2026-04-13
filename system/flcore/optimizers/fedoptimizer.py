@@ -6,7 +6,7 @@ class PerAvgOptimizer(Optimizer):
     def __init__(self, params, lr):
         defaults = dict(lr=lr)
         super(PerAvgOptimizer, self).__init__(params, defaults)
-
+              
     def step(self, beta=0):
         for group in self.param_groups:
             for p in group['params']:
@@ -62,6 +62,7 @@ class APFLOptimizer(Optimizer):
 
 
 class PerturbedGradientDescent(Optimizer):
+
     def __init__(self, params, lr=0.01, mu=0.0):
         default = dict(lr=lr, mu=mu)
         super().__init__(params, default)
@@ -73,3 +74,41 @@ class PerturbedGradientDescent(Optimizer):
                 g = g.to(device)
                 d_p = p.grad.data + group['mu'] * (p.data - g.data)
                 p.data.add_(d_p, alpha=-group['lr'])
+                
+class PerturbedGradientDescent1(Optimizer):
+    def __init__(self, params, lr=0.01, mu=0.0, momentum=0.9, weight_decay=1e-4):
+        # 必须在 default 里注册，后面才能通过 group['xxx'] 访问
+        defaults = dict(lr=lr, mu=mu, momentum=momentum, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, global_params, device):
+        for group in self.param_groups:
+            # 遍历参数和对应的全局参数
+            for p, g in zip(group['params'], global_params):
+                if p.grad is None:
+                    continue
+                
+                d_p = p.grad.data
+                g = g.to(device)
+                
+                # --- [新增] Weight Decay 逻辑 ---
+                if group['weight_decay'] != 0:
+                    d_p.add_(p.data, alpha=group['weight_decay'])
+
+                # --- [原有] FedProx Mu 逻辑 ---
+                d_p.add_(p.data - g.data, alpha=group['mu'])
+
+                # --- [新增] Momentum 逻辑 ---
+                if group['momentum'] != 0:
+                    param_state = self.state[p]
+                    if 'momentum_buffer' not in param_state:
+                        buf = param_state['momentum_buffer'] = torch.clone(d_p).detach()
+                    else:
+                        buf = param_state['momentum_buffer']
+                        buf.mul_(group['momentum']).add_(d_p)
+                    d_p = buf
+
+                # 更新参数
+                p.data.add_(d_p, alpha=-group['lr'])
+    

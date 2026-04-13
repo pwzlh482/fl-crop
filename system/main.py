@@ -65,31 +65,79 @@ from flcore.trainmodel.transformer import *
 from utils.result_utils import average_data
 from utils.mem_utils import MemReporter
 
+class ResNet_Cifar(nn.Module):
 
-# -------------------------- 新增：多卡并行适配（仅新增，不修改原有逻辑） --------------------------
+    def __init__(self, block, layers, num_classes=10):
+        super(ResNet_Cifar, self).__init__()
+        self.inplanes = 16
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.relu = nn.ReLU(inplace=True)
+        self.layer1 = self._make_layer(block, 16, layers[0])
+        self.layer2 = self._make_layer(block, 32, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 64, layers[2], stride=2)
+        self.avgpool = nn.AvgPool2d(8, stride=1)
+        self.fc = nn.Linear(64 * block.expansion, num_classes)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion)
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+
+        return x
+        
 def setup_device(args):
-    """适配device和device_id，支持多卡"""
+
     if args.device == "cuda":
-        # 设置可见GPU
+
         if args.device_id:
             os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id
-        # 检查GPU可用性
         if not torch.cuda.is_available():
             warnings.warn("CUDA不可用，自动切换到CPU")
             args.device = torch.device("cpu")
         else:
             args.device = torch.device("cuda")
-            # 多卡时封装模型为DataParallel
             args.multi_gpu = torch.cuda.device_count() > 1
     else:
         args.device = torch.device("cpu")
         args.multi_gpu = False
 
 def wrap_model_for_parallel(model, args):
-    """多卡模型封装（仅多卡时生效）"""
-    if args.multi_gpu and args.device.type == "cuda":
+    """args.multi_gpu and"""
+    if args.device.type == "cuda":
         model = nn.DataParallel(model)
-        print(f"[Multi-GPU] 启用 {torch.cuda.device_count()} 个GPU并行训练")
     return model
     
 logger = logging.getLogger()
@@ -140,40 +188,147 @@ def run(args):
             else:
                 args.model = DNN(60, 20, num_classes=args.num_classes).to(args.device)
 
-        elif model_str == "ResNet181":
-            args.model = torchvision.models.resnet18(pretrained=False, num_classes=args.num_classes)
-            if "Cifar10" in args.dataset:
-                args.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-                args.model.maxpool = nn.Identity()
-            args.model = args.model.to(args.device)
             
         elif model_str == "ResNet18":
             args.model = torchvision.models.resnet18(pretrained=False, num_classes=args.num_classes)
             
-            # 1. 替换 BN 为 GN 
+            args.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            args.model.maxpool = nn.Identity()
+
+            # 1. 替换 BN 为 GN
             def replace_bn(module):
                 for name, child in module.named_children():
                     if isinstance(child, nn.BatchNorm2d):
-                        setattr(module, name, nn.GroupNorm(2, child.num_features))
+                        setattr(module, name, nn.GroupNorm(32, child.num_features))
                     else: replace_bn(child)
-            replace_bn(args.model)
 
-            # 2. Kaiming 初始化 
+            replace_bn(args.model) 
+            #2.初始化
             for m in args.model.modules():
                 if isinstance(m, nn.Conv2d):
                     nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.GroupNorm):
+                    nn.init.constant_(m.weight, 1)
+                    nn.init.constant_(m.bias, 0)
                 elif isinstance(m, nn.Linear):
                     nn.init.normal_(m.weight, 0, 0.01)
                     nn.init.constant_(m.bias, 0)
-
-            # 3. 尺寸适配
+            # CIFAR10 数据增强
             if "Cifar10" in args.dataset:
-                args.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+                #导入必要模块（仅CIFAR10时导入，不影响其他数据集）
+                from torchvision import transforms
+                from utils.data_utils import read_client_data as original_read_client_data
+    
+                #定义CIFAR10数据增强策略
+                train_transform = transforms.Compose([
+                    transforms.RandomCrop(32, padding=4),  # 随机裁剪+填充
+                    transforms.RandomHorizontalFlip(p=0.5), # 随机水平翻转
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                ])
+                test_transform = transforms.Compose([
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                ])
+    
+                import utils.data_utils
+                original_read_client_data = utils.data_utils.read_client_data
+                def augmented_read_client_data(dataset, client_id, is_train=True, few_shot=None):
+                    data = original_read_client_data(dataset, client_id, is_train=is_train, few_shot=few_shot)
+                    # 强制设置transform
+                    if hasattr(data, 'dataset'):
+                        data.dataset.transform = train_transform if is_train else test_transform
+                    else:
+                        data.transform = train_transform if is_train else test_transform
+                    return data
+                    
+                utils.data_utils.read_client_data = augmented_read_client_data
+
+
+            elif "MNIST" in args.dataset:
+                args.model.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
+                # MNIST尺寸是28×28，去掉maxpool避免特征图过小
                 args.model.maxpool = nn.Identity()
+            args.model = args.model.to(args.device)
             
+        elif model_str == "MobileNet":
+            # 初始化模型 (不使用预训练权重)
+            args.model = models.mobilenet_v2(pretrained=False, num_classes=args.num_classes)
+
+            # 替换 BN 为 GN 
+            def replace_bn(module):
+                for name, child in module.named_children():
+                    if isinstance(child, nn.BatchNorm2d):
+                        num_features = child.num_features
+                        # 确保 num_features 能被 num_groups 整除，8 是比较稳妥的数字
+                        num_groups = 8 if num_features % 8 == 0 else 4
+                        if num_features < num_groups: num_groups = 1
+                        setattr(module, name, nn.GroupNorm(num_groups, num_features))
+                    else:
+                        replace_bn(child)
+
+            replace_bn(args.model)
+
+            #自动化初始化 (保持 Kaiming 初始化有助于从零训练收敛)
+            for m in args.model.modules():
+                if isinstance(m, nn.Conv2d):
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.GroupNorm):
+                    nn.init.constant_(m.weight, 1)
+                    nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.Linear):
+                    nn.init.normal_(m.weight, 0, 0.01)
+                    nn.init.constant_(m.bias, 0)
+                    
+            #针对小图数据集进行结构微调
+            if "Cifar10" in args.dataset :
+                # 对于 32x32 或农作物小图，减小第一层步长，防止特征过早丢失
+                args.model.features[0][0].stride = (1, 1)
+                print(">>> [优化] 已修改第一层 Stride 为 1，防止小图特征丢失")
+            
+
+                #数据增强猴子补丁 (核心精度提升：加入 Resize)
+                from torchvision import transforms
+                import utils.data_utils
+    
+                # 定义通用的增强策略，将图片放大到 64x64 显著提升 MobileNet 精度
+                img_size = 64 
+                train_transform = transforms.Compose([
+                    transforms.Resize(img_size),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                ])
+                test_transform = transforms.Compose([
+                    transforms.Resize(img_size),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                ])
+    
+                original_read_data = utils.data_utils.read_client_data
+                def augmented_read_client_data(dataset, client_id, is_train=True, few_shot=None):
+                    data = original_read_data(dataset, client_id, is_train=is_train, few_shot=few_shot)
+                    # 注入 transform
+                    data.transform = train_transform if is_train else test_transform
+                    return data
+                
+                utils.data_utils.read_client_data = augmented_read_client_data
+                print(f">>> [准确率补丁] 已注入数据增强并统一 Resize 至 {img_size}x{img_size}")
+
+            
+            elif "MNIST" in args.dataset:
+                # MNIST 是单通道 28x28
+                args.model.features[0][0] = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1, bias=False)
+                print(">>> [优化] 已适配 MNIST 单通道，Stride设为1以保持特征图尺寸")
+
+            #移动到 GPU/CPU
             args.model = args.model.to(args.device)
 
-            
+
         
         elif model_str == "ResNet10":
             args.model = resnet10(num_classes=args.num_classes).to(args.device)
@@ -195,9 +350,10 @@ def run(args):
             # args.model = torchvision.models.googlenet(pretrained=True, aux_logits=False).to(args.device)
             # feature_dim = list(args.model.fc.parameters())[0].shape[1]
             # args.model.fc = nn.Linear(feature_dim, args.num_classes).to(args.device)
-
-        elif model_str == "MobileNet":
-            args.model = mobilenet_v2(pretrained=False, num_classes=args.num_classes).to(args.device)
+            
+        elif model_str == "MobileNet1":
+        
+            args.model = models.mobilenet_v2(pretrained=False, num_classes=args.num_classes).to(args.device)
             
             # args.model = mobilenet_v2(pretrained=True).to(args.device)
             # feature_dim = list(args.model.fc.parameters())[0].shape[1]
@@ -236,14 +392,14 @@ def run(args):
 
         else:
             raise NotImplementedError
-
-        # -------------------------- 新增：多卡模型封装 --------------------------
-        args.model = wrap_model_for_parallel(args.model, args)
+            
+        args.model = args.model
+        
         print(args.model)
 
         # select algorithm
         if args.algorithm == "FedAvg":
-            args.head = copy.deepcopy(args.model.fc)
+            args.head = copy.deepcopy(args.model.module.fc)
             args.model.fc = nn.Identity()
             args.model = BaseHeadSplit(args.model, args.head)
             server = FedAvg(args, i)
@@ -451,21 +607,25 @@ if __name__ == "__main__":
                         help="The goal for this experiment")
     parser.add_argument('-dev', "--device", type=str, default="cuda",
                         choices=["cpu", "cuda"])
-    parser.add_argument('-did', "--device_id", type=str, default="0")
-    parser.add_argument('-data', "--dataset", type=str, default="Cifar10")
+    parser.add_argument('-did', "--device_id", type=str, default="0")#0
+    parser.add_argument('-data', "--dataset", type=str, default="MNIST")#dataset
     parser.add_argument('-ncl', "--num_classes", type=int, default=10)
-    parser.add_argument('-m', "--model", type=str, default="ResNet18")
+    parser.add_argument('-m', "--model", type=str, default="MobileNet")#model
     parser.add_argument('-lbs', "--batch_size", type=int, default=64)    #10
-    parser.add_argument('-lr', "--local_learning_rate", type=float, default=0.01,
+    parser.add_argument('-lr', "--local_learning_rate", type=float, default=0.05,
                         help="Local learning rate")
-    parser.add_argument('-ld', "--learning_rate_decay", type=bool, default=False)#False
-    parser.add_argument('-ldg', "--learning_rate_decay_gamma", type=float, default=0.98)
-    parser.add_argument('-gr', "--global_rounds", type=int, default=100)
-    parser.add_argument('-tc', "--top_cnt", type=int, default=100, 
+    parser.add_argument('-ld', "--learning_rate_decay", type=bool, default=True)#False
+    parser.add_argument('-ldg', "--learning_rate_decay_gamma", type=float, default=0.2)
+    parser.add_argument('-ldm', "--lr_decay_milestones", type=int, nargs='+', default=[20,40],
+                    help="轮次节点，比如输入 80 120 表示在80、120轮衰减学习率")
+    parser.add_argument('-gr', "--global_rounds", type=int, default=70)#2000
+    parser.add_argument('-tc', "--top_cnt", type=int, default=10, 
                         help="For auto_break")
-    parser.add_argument('-ls', "--local_epochs", type=int, default=5, #1
+    parser.add_argument('-ls', "--local_epochs", type=int, default=1, #1
                         help="Multiple update steps in one local epoch.")
-    parser.add_argument('-algo', "--algorithm", type=str, default="FedProx")#model
+    parser.add_argument('-algo', "--algorithm", type=str, default="FedProx")#fedmodel
+
+    parser.add_argument('--weight-decay', '--wd', dest='weight_decay', default=1e-4, type=float, help='weight decay')
     parser.add_argument('-jr', "--join_ratio", type=float, default=1,
                         help="Ratio of clients per round")
     parser.add_argument('-rjr', "--random_join_ratio", type=bool, default=False,
@@ -476,13 +636,13 @@ if __name__ == "__main__":
                         help="Previous Running times")
     parser.add_argument('-t', "--times", type=int, default=1,
                         help="Running times")
-    parser.add_argument('-eg', "--eval_gap", type=int, default=3,   
+    parser.add_argument('-eg', "--eval_gap", type=int, default=1,   
                         help="Rounds gap for evaluation")     #1
     parser.add_argument('-sfn', "--save_folder_name", type=str, default='items')
-    parser.add_argument('-ab', "--auto_break", type=bool, default=False)
+    parser.add_argument('-ab', "--auto_break", type=bool, default=True)#autobreak
     parser.add_argument('-dlg', "--dlg_eval", type=bool, default=False)
     parser.add_argument('-dlgg', "--dlg_gap", type=int, default=100)
-    parser.add_argument('-bnpc', "--batch_num_per_client", type=int, default=2)#2
+    parser.add_argument('-bnpc', "--batch_num_per_client", type=int, default=10)#2
     parser.add_argument('-nnc', "--num_new_clients", type=int, default=0)
     parser.add_argument('-ften', "--fine_tuning_epoch_new", type=int, default=0)
     parser.add_argument('-fd', "--feature_dim", type=int, default=512)
@@ -505,7 +665,7 @@ if __name__ == "__main__":
     parser.add_argument('-bt', "--beta", type=float, default=0.0)
     parser.add_argument('-lam', "--lamda", type=float, default=1.0,
                         help="Regularization weight")
-    parser.add_argument('-mu', "--mu", type=float, default=0.05)#0.0
+    parser.add_argument('-mu', "--mu", type=float, default=0.01)#0.0
     parser.add_argument('-K', "--K", type=int, default=5,
                         help="Number of personalized training steps for pFedMe")
     parser.add_argument('-lrp', "--p_learning_rate", type=float, default=0.01,
@@ -549,7 +709,7 @@ if __name__ == "__main__":
     parser.add_argument('-Ts', "--T_start", type=float, default=0.95)
     parser.add_argument('-Te', "--T_end", type=float, default=0.98)
     # FedDBE
-    parser.add_argument('-mo', "--momentum", type=float, default=0.1)
+    parser.add_argument('-mo', "--momentum", type=float, default=0.9)
     parser.add_argument('-klw', "--kl_weight", type=float, default=0.0)
 
     # FedCross
@@ -559,15 +719,34 @@ if __name__ == "__main__":
 
 
     args = parser.parse_args()
-
+    
     if args.device == "cuda" and args.device_id:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id
-    # 初始化设备（多卡适配）
     setup_device(args)
     if args.device == "cuda" and not torch.cuda.is_available():
         print("\ncuda is not avaiable.\n")
         args.device = torch.device("cpu")
         args.multi_gpu = False
+    
+    import torch
+    import os
+    
+
+    total_clients = args.num_clients # 建议使用参数里的数量
+    
+    if args.device == "cuda" and "," in args.device_id:
+        # 只要用了 CUDA_VISIBLE_DEVICES，逻辑 ID 永远是从 0 开始的
+        num_gpus = len(args.device_id.split(','))
+        available_gpus = [torch.device(f"cuda:{i}") for i in range(num_gpus)]
+    else:
+        available_gpus = [torch.device(args.device)]
+    
+    # 均匀分配：使用取模运算更健壮
+    args.client_device_map = {}
+    for client_id in range(total_clients):
+        gpu_idx = client_id % len(available_gpus)
+        args.client_device_map[client_id] = available_gpus[gpu_idx]
+       
 
 
     print("=" * 50)

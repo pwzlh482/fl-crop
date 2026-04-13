@@ -62,6 +62,59 @@ class Server(object):
         self.new_clients = []
         self.eval_new_clients = False
         self.fine_tuning_epoch_new = args.fine_tuning_epoch_new
+        
+        
+        """
+        # --- 针对 PFLlib 结构的智能自适应加载逻辑 ---
+        import torch
+        import os
+
+        model_path = os.path.join("models", self.dataset, f"{self.algorithm}_server.pt")
+
+        if os.path.exists(model_path):
+            print("\n" + "="*40)
+            print(f"发现已有模型权重: {model_path}")
+            
+            try:
+                loaded_data = torch.load(model_path, map_location=self.device)
+                
+                # 情况 A: 如果加载的是整个模型实例
+                if isinstance(loaded_data, torch.nn.Module):
+                    state_dict = loaded_data.state_dict()
+                else:
+                    state_dict = loaded_data
+
+                # 情况 B: 自动处理 module. 前缀冲突
+                # 获取当前模型的所有 key
+                current_model_keys = self.global_model.state_dict().keys()
+                # 检查当前模型是否带 module.
+                model_has_module = any(k.startswith('module.') for k in current_model_keys)
+                # 检查保存的权重是否带 module.
+                data_has_module = any(k.startswith('module.') for k in state_dict.keys())
+
+                new_state_dict = {}
+                if model_has_module and not data_has_module:
+                    # 模型要前缀，数据没有 -> 给数据加上
+                    for k, v in state_dict.items():
+                        new_state_dict["module." + k] = v
+                elif not model_has_module and data_has_module:
+                    # 模型不要前缀，数据有 -> 把数据去掉
+                    for k, v in state_dict.items():
+                        new_state_dict[k.replace("module.", "")] = v
+                else:
+                    # 两者一致，直接用
+                    new_state_dict = state_dict
+                
+                # 正式加载，设置 strict=False 容错
+                self.global_model.load_state_dict(new_state_dict, strict=True)
+                print("权重自适应加载成功！")
+                
+            except Exception as e:
+                print(f"加载出错: {e}")
+                print("程序将尝试继续运行...")
+            print("="*40 + "\n")
+        """
+
 
     def set_clients(self, clientObj):
         for i, train_slow, send_slow in zip(range(self.num_clients), self.train_slow_clients, self.send_slow_clients):
@@ -150,7 +203,7 @@ class Server(object):
         for server_param, client_param in zip(self.global_model.parameters(), client_model.parameters()):
             server_param.data += client_param.data.clone() * w
 
-    def save_global_model(self):
+    def save_global_model1(self):
         model_path = os.path.join("models", self.dataset)
         if not os.path.exists(model_path):
             os.makedirs(model_path)
@@ -168,7 +221,7 @@ class Server(object):
         model_path = os.path.join(model_path, self.algorithm + "_server" + ".pt")
         return os.path.exists(model_path)
         
-    def save_results(self):
+    def save_results1(self):
         algo = self.dataset + "_" + self.algorithm
         result_path = "../results/"
         if not os.path.exists(result_path):
@@ -183,6 +236,57 @@ class Server(object):
                 hf.create_dataset('rs_test_acc', data=self.rs_test_acc)
                 hf.create_dataset('rs_test_auc', data=self.rs_test_auc)
                 hf.create_dataset('rs_train_loss', data=self.rs_train_loss)
+
+    def save_global_model(self):
+        # 1. 路径处理
+        model_path = os.path.join("models", self.dataset)
+        if not os.path.exists(model_path):
+            os.makedirs(model_path)
+            
+        # 2. 获取当前测试集最高准确率
+        max_acc = max(self.rs_test_acc) if len(self.rs_test_acc) > 0 else 0
+        acc_str = f"_acc{max_acc:.4f}"
+        
+        # 3. 动态获取模型名称 (从 args 中提取模型类名或指定名称)
+        # 如果 args 里没有 model_name，则尝试从模型对象中获取类名
+        m_name = getattr(self.args, 'model_name', self.global_model.__class__.__name__)
+        
+        # 4. 组合文件名：模型名_算法名_server_准确率.pt
+        file_name = f"{m_name}_{self.algorithm}_server{acc_str}.pt"
+        model_full_path = os.path.join(model_path, file_name)
+        
+        # 5. 保存
+        torch.save(self.global_model, model_full_path)
+        print(f"Model saved to: {model_full_path}")
+
+    def save_results(self):
+        # 1. 动态获取模型名称
+        m_name = getattr(self.args, 'model_name', self.global_model.__class__.__name__)
+        
+        # 2. 基础命名格式：数据集_模型_算法
+        algo_base = f"{self.dataset}_{m_name}_{self.algorithm}"
+        
+        result_path = "../results/"
+        if not os.path.exists(result_path):
+            os.makedirs(result_path)
+
+        if (len(self.rs_test_acc)):
+            # 3. 获取最高准确率
+            max_acc = max(self.rs_test_acc)
+            acc_str = f"_acc{max_acc:.4f}"
+            
+            # 4. 组合结果文件名 (包含 goal 和准确率，确保不覆盖旧结果)
+            # 例如: Cifar10_ResNet18_FedProx_Global_acc0.6500.h5
+            algo_final = f"{algo_base}_{self.goal}_{acc_str}"
+            file_path = os.path.join(result_path, f"{algo_final}.h5")
+            
+            print("File path: " + file_path)
+
+            with h5py.File(file_path, 'w') as hf:
+                hf.create_dataset('rs_test_acc', data=self.rs_test_acc)
+                hf.create_dataset('rs_test_auc', data=self.rs_test_auc)
+                hf.create_dataset('rs_train_loss', data=self.rs_train_loss)
+
 
     def save_item(self, item, item_name):
         if not os.path.exists(self.save_folder_name):
@@ -245,13 +349,17 @@ class Server(object):
             self.rs_train_loss.append(train_loss)
         else:
             loss.append(train_loss)
-
+        print("Current Learning Rate: {:.6f}".format(self.learning_rate)) 
         print("Averaged Train Loss: {:.4f}".format(train_loss))
         print("Averaged Test Accuracy: {:.4f}".format(test_acc))
         print("Averaged Test AUC: {:.4f}".format(test_auc))
         # self.print_(test_acc, train_acc, train_loss)
         print("Std Test Accuracy: {:.4f}".format(np.std(accs)))
         print("Std Test AUC: {:.4f}".format(np.std(aucs)))
+        
+
+
+
 
     def print_(self, test_acc, test_auc, train_loss):
         print("Average Test Accuracy: {:.4f}".format(test_acc))

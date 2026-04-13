@@ -1,10 +1,11 @@
 import time
+import torch
 from flcore.clients.clientprox import clientProx
 from flcore.servers.serverbase import Server
 from threading import Thread
 
-
 class FedProx(Server):
+
     def __init__(self, args, times):
         super().__init__(args, times)
 
@@ -19,11 +20,22 @@ class FedProx(Server):
         # self.load_model()
         self.Budget = []
 
-
     def train(self):
         for i in range(self.global_rounds+1):
             s_t = time.time()
+            
+            # --- 由服务器统一计算本轮学习率 ---
+            if self.args.learning_rate_decay:
+                # 只有到达指定的 milestones (如 100 轮) 才会降速
+                count = 0
+                for m in self.args.lr_decay_milestones:
+                    if i >= m:
+                        count += 1
+                self.learning_rate = self.args.local_learning_rate * (self.args.learning_rate_decay_gamma ** count)
             self.selected_clients = self.select_clients()
+            
+            for client in self.selected_clients:
+                client.learning_rate = self.learning_rate
             self.send_models()
 
             if i%self.eval_gap == 0:
@@ -40,6 +52,7 @@ class FedProx(Server):
             # [t.join() for t in threads]
 
             self.receive_models()
+
             if self.dlg_eval and i%self.dlg_gap == 0:
                 self.call_dlg(i)
             self.aggregate_parameters()
@@ -66,3 +79,4 @@ class FedProx(Server):
             print(f"\n-------------Fine tuning round-------------")
             print("\nEvaluate new clients")
             self.evaluate()
+    
