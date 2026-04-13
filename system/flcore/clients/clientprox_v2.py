@@ -62,10 +62,10 @@ class clientProxV2(Client):
         self.current_round = 0
 
         # 优化6: Mixup 数据增强
-        self.mixup_alpha = getattr(args, 'mixup_alpha', 0.2)
+        self.mixup_alpha = getattr(args, 'mixup_alpha', 0)
 
         # 优化7: 深度监督（Deep Supervision）
-        self.aux_weight = getattr(args, 'aux_weight', 0.3)
+        self.aux_weight = getattr(args, 'aux_weight', 0)
         self.aux_heads = None  # 延迟初始化（需要知道 num_classes）
 
         if self.aux_weight > 0:
