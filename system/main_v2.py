@@ -719,7 +719,7 @@ def main():
     parser.add_argument('-ncl', "--num_classes", type=int, default=10)
     parser.add_argument('-m', "--model", type=str, default="MobileNet")
     parser.add_argument('-lbs', "--batch_size", type=int, default=64)
-    parser.add_argument('-lr', "--local_learning_rate", type=float, default=0.01,
+    parser.add_argument('-lr', "--local_learning_rate", type=float, default=0.05,
                         help="Local learning rate")
     parser.add_argument('-ld', "--learning_rate_decay", type=bool, default=True)
     parser.add_argument('-ldg', "--learning_rate_decay_gamma", type=float, default=0.2)
@@ -728,7 +728,7 @@ def main():
     parser.add_argument('-gr', "--global_rounds", type=int, default=70)
     parser.add_argument('-tc', "--top_cnt", type=int, default=10,
                         help="For auto_break")
-    parser.add_argument('-ls', "--local_epochs", type=int, default=1,
+    parser.add_argument('-ls', "--local_epochs", type=int, default=3,
                         help="Multiple update steps in one local epoch.")
     parser.add_argument('-algo', "--algorithm", type=str, default="FedProxV2")
 
@@ -826,16 +826,16 @@ def main():
     parser.add_argument('-cmss', "--collaberative_model_select_strategy", type=int, default=1)
 
     # ===== V2 新增参数 =====
-    parser.add_argument('-wr', "--warmup_rounds", type=int, default=5,
-                        help="Warmup rounds for V2 (linear warmup)")
+    parser.add_argument('-wr', "--warmup_rounds", type=int, default=0,
+                        help="Warmup rounds for V2 (0=关闭)")
     parser.add_argument('-pp', "--pretrained_path", type=str, default="",
                         help="离线预训练权重路径")
     parser.add_argument('-mn', "--model_name", type=str, default="",
                         help="模型名称，用于保存文件命名")
-    parser.add_argument('-ma', "--mixup_alpha", type=float, default=0.2,
-                        help="Mixup 数据增强 alpha 值，0 表示关闭")
-    parser.add_argument('-aw', "--aux_weight", type=float, default=0.3,
-                        help="深度监督辅助损失权重，0 表示关闭")
+    parser.add_argument('-ma', "--mixup_alpha", type=float, default=0,
+                        help="Mixup 数据增强 alpha 值，0=关闭，推荐0.2")
+    parser.add_argument('-aw', "--aux_weight", type=float, default=0,
+                        help="深度监督辅助损失权重，0=关闭，推荐0.3")
 
     args = parser.parse_args()
 
