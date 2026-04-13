@@ -843,9 +843,6 @@ def main():
         args.device = torch.device("cpu")
         args.multi_gpu = False
 
-    import torch
-    import os
-
     total_clients = args.num_clients
 
     if args.device == "cuda" and "," in args.device_id:
