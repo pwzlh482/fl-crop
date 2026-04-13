@@ -4,10 +4,11 @@ main_v2.py - 优化版入口
 基于实际服务器 main.py，仅新增，不修改原文件
 
 优化点：
-1. 使用 FedProxV2（label_smoothing + momentum + CosineAnnealing + 梯度裁剪 + Warmup）
-2. 支持离线加载预训练 ResNet18 权重
-3. 优化默认参数（更适合CIFAR10训练）
-4. 新增 warmup_rounds 参数
+1. 使用 FedProxV2（label_smoothing + momentum + CosineAnnealing + 梯度裁剪 + 动态mu衰减 + Warmup）
+2. 支持离线加载预训练 ResNet18 / MobileNetV2 权重
+3. 增强数据增强：ColorJitter + RandomErasing
+4. 优化默认参数（更适合CIFAR10训练）
+5. 新增 warmup_rounds 参数
 """
 
 import copy
@@ -340,16 +341,18 @@ def run(args):
                     nn.init.normal_(m.weight, 0, 0.01)
                     nn.init.constant_(m.bias, 0)
 
-            # CIFAR10 数据增强
-            if "Cifar10" in args.dataset:
+            # CIFAR10 / Crop 数据增强（含 ColorJitter + RandomErasing）
+            if "Cifar10" in args.dataset or "crop" in args.dataset.lower():
                 from torchvision import transforms
                 import utils.data_utils
 
                 train_transform = transforms.Compose([
                     transforms.RandomCrop(32, padding=4),
                     transforms.RandomHorizontalFlip(p=0.5),
+                    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
                     transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010]),
+                    transforms.RandomErasing(p=0.2, scale=(0.02, 0.1)),
                 ])
                 test_transform = transforms.Compose([
                     transforms.ToTensor(),
@@ -366,6 +369,7 @@ def run(args):
                     return data
 
                 utils.data_utils.read_client_data = augmented_read_client_data
+                print(">>> [V2增强] 已注入 ColorJitter + RandomErasing 数据增强")
 
             elif "MNIST" in args.dataset:
                 args.model.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
@@ -408,7 +412,7 @@ def run(args):
                     nn.init.constant_(m.bias, 0)
 
             # 小图数据集适配
-            if "Cifar10" in args.dataset:
+            if "Cifar10" in args.dataset or "crop" in args.dataset.lower():
                 args.model.features[0][0].stride = (1, 1)
                 print(">>> [优化] 已修改第一层 Stride 为 1，防止小图特征丢失")
 
@@ -419,8 +423,10 @@ def run(args):
                 train_transform = transforms.Compose([
                     transforms.Resize(img_size),
                     transforms.RandomHorizontalFlip(),
+                    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
                     transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010]),
+                    transforms.RandomErasing(p=0.2, scale=(0.02, 0.1)),
                 ])
                 test_transform = transforms.Compose([
                     transforms.Resize(img_size),
@@ -435,7 +441,7 @@ def run(args):
                     return data
 
                 utils.data_utils.read_client_data = augmented_read_client_data
-                print(f">>> [准确率补丁] 已注入数据增强并统一 Resize 至 {img_size}x{img_size}")
+                print(f">>> [V2增强] 已注入数据增强并统一 Resize 至 {img_size}x{img_size}")
 
             elif "MNIST" in args.dataset:
                 args.model.features[0][0] = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1, bias=False)
@@ -518,7 +524,7 @@ def run(args):
         elif args.algorithm == "FedProx":
             server = FedProx(args, i)
 
-        # ===== V2 优化版 FedProx =====
+        # ===== V2 优化版 FedProx（含动态mu + 增强数据增强） =====
         elif args.algorithm == "FedProxV2":
             server = FedProxV2(args, i)
 
@@ -823,7 +829,9 @@ if __name__ == "__main__":
     parser.add_argument('-wr', "--warmup_rounds", type=int, default=5,
                         help="Warmup rounds for V2 (linear warmup)")
     parser.add_argument('-pp', "--pretrained_path", type=str, default="",
-                        help="离线预训练权重路径，如 resnet18_imagenet.pt（手机下载后传到服务器）")
+                        help="离线预训练权重路径")
+    parser.add_argument('-mn', "--model_name", type=str, default="",
+                        help="模型名称，用于保存文件命名")
 
     args = parser.parse_args()
 
@@ -850,6 +858,10 @@ if __name__ == "__main__":
     for client_id in range(total_clients):
         gpu_idx = client_id % len(available_gpus)
         args.client_device_map[client_id] = available_gpus[gpu_idx]
+
+    # 自动设置 model_name
+    if not args.model_name:
+        args.model_name = args.model
 
     print("=" * 50)
     for arg in vars(args):

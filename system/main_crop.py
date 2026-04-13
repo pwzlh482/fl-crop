@@ -1,12 +1,13 @@
+#!/usr/bin/env python
 """
-main_crop.py - CropV2 优化入口
-基于 main_v2.py，新增 CropV2 算法支持
+main_crop.py - FedProxV2 优化入口（Crop 联邦学习专用）
+基于 main_v2.py，增强数据增强 + 动态mu + 预训练权重自动加载
 
 优化点（全面提升精度）：
-1. CropV2 = FedProx + Label Smoothing + CosineAnnealing + 动态mu衰减 + 梯度裁剪
+1. FedProxV2 = FedProx + Label Smoothing + CosineAnnealing + 动态mu衰减 + 梯度裁剪
 2. 增强数据增强：ColorJitter + RandomErasing（CIFAR-10/Crop 数据集）
-3. 支持离线预训练 ResNet18 权重
-4. Mixup 数据增强（可选）
+3. 支持离线预训练 ResNet18 / MobileNetV2 权重（自动检测）
+4. 直接 python main_crop.py 即可运行
 """
 
 import copy
@@ -68,7 +69,6 @@ from flcore.servers.servercross import FedCross
 
 # V2 优化版
 from flcore.servers.serverprox_v2 import FedProxV2
-from flcore.servers.server_crop_v2 import ServerCropV2
 
 from flcore.trainmodel.models import *
 from flcore.trainmodel.bilstm import *
@@ -465,13 +465,9 @@ def run(args):
         elif args.algorithm == "FedProx":
             server = FedProx(args, i)
 
-        # ===== V2 优化版 FedProx =====
+        # ===== V2 优化版 FedProx（含动态mu + 增强数据增强） =====
         elif args.algorithm == "FedProxV2":
             server = FedProxV2(args, i)
-
-        # ===== CropV2 优化版（完整优化：动态mu + CosineAnnealing + Label Smoothing + 梯度裁剪） =====
-        elif args.algorithm == "CropV2":
-            server = ServerCropV2(args, i)
 
         elif args.algorithm == "FedFomo":
             server = FedFomo(args, i)
@@ -675,7 +671,7 @@ if __name__ == "__main__":
                         help="For auto_break")
     parser.add_argument('-ls', "--local_epochs", type=int, default=1,
                         help="Multiple update steps in one local epoch.")
-    parser.add_argument('-algo', "--algorithm", type=str, default="CropV2")
+    parser.add_argument('-algo', "--algorithm", type=str, default="FedProxV2")
 
     parser.add_argument('--weight-decay', '--wd', dest='weight_decay', default=1e-4, type=float,
                         help='weight decay')
@@ -758,7 +754,7 @@ if __name__ == "__main__":
     parser.add_argument('-ca', "--fedcross_alpha", type=float, default=0.99)
     parser.add_argument('-cmss', "--collaberative_model_select_strategy", type=int, default=1)
 
-    # ===== V2 / CropV2 新增参数 =====
+    # ===== V2 新增参数 =====
     parser.add_argument('-wr', "--warmup_rounds", type=int, default=5,
                         help="Warmup rounds for V2 (linear warmup)")
     parser.add_argument('-pp', "--pretrained_path", type=str, default="",

@@ -7,6 +7,7 @@ clientProx V2 - FedProx 优化客户端
 2. PerturbedGradientDescent1 替代原版 SGD，支持 momentum + weight_decay
 3. CosineAnnealingWarmRestarts 学习率调度（替代 MultiStepLR，收敛更平滑）
 4. 梯度裁剪 max_norm=5.0 防止梯度爆炸
+5. 动态 mu 衰减 — 高 mu 抑制早期漂移，低 mu 释放后期个性化
 """
 
 import torch
@@ -50,8 +51,12 @@ class clientProxV2(Client):
             eta_min=self.learning_rate * 0.01
         )
 
-        # 梯度裁剪阈值
+        # 优化4: 梯度裁剪阈值
         self.max_grad_norm = 5.0
+
+        # 优化5: 动态 mu 参数
+        self.base_mu = args.mu
+        self.current_round = 0
 
     def train(self):
         trainloader = self.load_train_data()
@@ -64,7 +69,11 @@ class clientProxV2(Client):
 
         for epoch in range(max_local_epochs):
             for x, y in trainloader:
-                x, y = x.to(self.device), y.to(self.device)
+                if type(x) == type([]):
+                    x[0] = x[0].to(self.device)
+                else:
+                    x = x.to(self.device)
+                y = y.to(self.device)
 
                 self.optimizer.zero_grad()
                 output = self.model(x)
@@ -95,6 +104,21 @@ class clientProxV2(Client):
         for new_param, global_param, param in zip(model.parameters(), self.global_params, self.model.parameters()):
             global_param.data = new_param.data.clone()
             param.data = new_param.data.clone()
+
+    def update_mu(self, current_round, total_rounds):
+        """优化5: 动态 mu 衰减 — 前期高 mu 抑制漂移，后期低 mu 释放个性化
+
+        衰减公式: mu = base_mu * (0.5 + 0.5 * cos(pi * min(progress, 1)))
+        progress 从 0 到 1，mu 从 base_mu 平滑衰减到 0
+        """
+        self.current_round = current_round
+        progress = min(current_round / max(total_rounds, 1), 1.0)
+        decay_factor = 0.5 + 0.5 * np.cos(np.pi * progress)
+        self.mu = self.base_mu * decay_factor
+
+        # 同步更新优化器中的 mu
+        for param_group in self.optimizer.param_groups:
+            param_group['mu'] = self.mu
 
     def train_metrics(self):
         trainloader = self.load_train_data()

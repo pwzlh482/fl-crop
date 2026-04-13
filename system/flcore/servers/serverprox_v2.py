@@ -4,8 +4,9 @@ serverProx V2 - FedProx 优化服务端
 
 优化点：
 1. Warmup 学习率策略（前5轮线性升温，避免初期大梯度）
-2. 服务器端 lr 衰减兼容客户端 CosineAnnealing（不下发覆盖，让客户端自主调度）
-3. 训练过程中打印最优准确率追踪
+2. 动态 mu 衰减调度 — 前期高 mu 抑制漂移，后期低 mu 释放个性化
+3. 训练过程中追踪最优准确率
+4. 服务器端 lr 衰减兼容客户端 CosineAnnealing（不下发覆盖，让客户端自主调度）
 """
 
 import time
@@ -32,6 +33,9 @@ class FedProxV2(Server):
         # Warmup 参数
         self.warmup_rounds = getattr(args, 'warmup_rounds', 5)
         self.base_lr = args.local_learning_rate
+
+        # 动态 mu 参数
+        self.base_mu = args.mu
 
     def train(self):
         best_acc = 0.0
@@ -60,10 +64,15 @@ class FedProxV2(Server):
                 for param_group in client.optimizer.param_groups:
                     param_group['lr'] = self.learning_rate
 
+            # 优化2: 动态 mu 衰减
+            for client in self.selected_clients:
+                client.update_mu(i, self.global_rounds)
+
             self.send_models()
 
             if i % self.eval_gap == 0:
                 print(f"\n-------------Round number: {i}-------------")
+                print(f"Current mu: {self.selected_clients[0].mu:.6f}" if len(self.selected_clients) > 0 else "")
                 print("\nEvaluate global model")
                 self.evaluate()
 
