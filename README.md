@@ -8,8 +8,8 @@ Based on [PFLlib](https://github.com/TsingZ0/PFLlib), optimized for crop image c
 
 | File | Description |
 |------|-------------|
-| `system/main_v2.py` | Entry point with pretrained weight support |
-| `system/main_crop.py` | Crop FL entry point (default FedProxV2, same features as main_v2) |
+| `system/main_v2.py` | Entry point with all optimizations |
+| `system/main_crop.py` | Shortcut to main_v2.py (`python main_crop.py` works) |
 | `system/flcore/clients/clientprox_v2.py` | Optimized FedProx client |
 | `system/flcore/servers/serverprox_v2.py` | Optimized FedProx server |
 
@@ -61,8 +61,8 @@ python generate_Crop.py
 ```
 system/
   main.py                # Original entry
-  main_v2.py             # FedProxV2 entry
-  main_crop.py           # Crop FL entry (FedProxV2 default)
+  main_v2.py             # FedProxV2 entry (all optimizations)
+  main_crop.py           # Shortcut → main_v2.py (just `python main_crop.py`)
   config.py              # Configuration
   flcore/
     clients/

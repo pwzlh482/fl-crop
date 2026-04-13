@@ -705,7 +705,7 @@ def run(args):
     reporter.report()
 
 
-if __name__ == "__main__":
+def main():
     total_start = time.time()
 
     parser = argparse.ArgumentParser()
@@ -869,3 +869,7 @@ if __name__ == "__main__":
     print("=" * 50)
 
     run(args)
+
+
+if __name__ == "__main__":
+    main()
