@@ -834,6 +834,8 @@ def main():
                         help="模型名称，用于保存文件命名")
     parser.add_argument('-ma', "--mixup_alpha", type=float, default=0.2,
                         help="Mixup 数据增强 alpha 值，0 表示关闭")
+    parser.add_argument('-aw', "--aux_weight", type=float, default=0.3,
+                        help="深度监督辅助损失权重，0 表示关闭")
 
     args = parser.parse_args()
 
