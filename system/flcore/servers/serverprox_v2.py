@@ -72,7 +72,7 @@ class FedProxV2(Server):
 
             if i % self.eval_gap == 0:
                 print(f"\n-------------Round number: {i}-------------")
-                print(f"Current mu: {self.selected_clients[0].mu:.6f}" if len(self.selected_clients) > 0 else "")
+                print(f"Current mu: {self.selected_clients[0].mu:.6f}, Current lr: {self.learning_rate:.6f}" if len(self.selected_clients) > 0 else "")
                 print("\nEvaluate global model")
                 self.evaluate()
 
