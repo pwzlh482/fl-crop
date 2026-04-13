@@ -1,0 +1,56 @@
+# 压缩包
+*.zip
+*.rar
+*.7z
+*.tar.gz
+*.tar
+*.gz
+
+# 图片文件
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
+*.svg
+*.webp
+
+# 模型权重
+*.pth
+*.pt
+*.ckpt
+*.bin
+*.onnx
+
+# 数据文件
+*.npy
+*.npz
+*.h5
+*.csv
+*.xlsx
+
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
+*.log
+
+# 系统文件
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 大文件目录
+dataset/MNIST/
+dataset/Cifar10/
+dataset/crop_data/
+system/crop_data/
+system/saved_models/
+system/predict_images/
+results/
+models/
+items/
+rawdata/

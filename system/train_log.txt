@@ -1,0 +1,1169 @@
+nohup: ignoring input
+==================================================
+goal = test
+device = cuda
+device_id = 3
+dataset = MNIST
+num_classes = 10
+model = MobileNet
+batch_size = 64
+local_learning_rate = 0.05
+learning_rate_decay = True
+learning_rate_decay_gamma = 0.2
+lr_decay_milestones = [20, 40]
+global_rounds = 70
+top_cnt = 10
+local_epochs = 1
+algorithm = FedProx
+weight_decay = 0.0001
+join_ratio = 1
+random_join_ratio = False
+num_clients = 20
+prev = 0
+times = 1
+eval_gap = 1
+save_folder_name = items
+auto_break = True
+dlg_eval = False
+dlg_gap = 100
+batch_num_per_client = 10
+num_new_clients = 0
+fine_tuning_epoch_new = 0
+feature_dim = 512
+vocab_size = 80
+max_len = 200
+few_shot = 0
+client_drop_rate = 0.0
+train_slow_rate = 0.0
+send_slow_rate = 0.0
+time_select = False
+time_threthold = 10000
+beta = 0.0
+lamda = 1.0
+mu = 0.01
+K = 5
+p_learning_rate = 0.01
+M = 5
+itk = 4000
+alphaK = 1.0
+sigma = 1.0
+alpha = 1.0
+plocal_epochs = 1
+tau = 1.0
+fine_tuning_epochs = 10
+dr_learning_rate = 0.0
+L = 1.0
+noise_dim = 512
+generator_learning_rate = 0.005
+hidden_dim = 512
+server_epochs = 1000
+localize_feature_extractor = False
+server_learning_rate = 1.0
+eta = 1.0
+rand_percent = 80
+layer_idx = 2
+mentee_learning_rate = 0.005
+T_start = 0.95
+T_end = 0.98
+momentum = 0.9
+kl_weight = 0.0
+first_stage_bound = 0
+fedcross_alpha = 0.99
+collaberative_model_select_strategy = 1
+multi_gpu = False
+client_device_map = {0: device(type='cuda'), 1: device(type='cuda'), 2: device(type='cuda'), 3: device(type='cuda'), 4: device(type='cuda'), 5: device(type='cuda'), 6: device(type='cuda'), 7: device(type='cuda'), 8: device(type='cuda'), 9: device(type='cuda'), 10: device(type='cuda'), 11: device(type='cuda'), 12: device(type='cuda'), 13: device(type='cuda'), 14: device(type='cuda'), 15: device(type='cuda'), 16: device(type='cuda'), 17: device(type='cuda'), 18: device(type='cuda'), 19: device(type='cuda')}
+==================================================
+
+============= Running time: 0th =============
+Creating server and clients ...
+>>> [优化] 已适配 MNIST 单通道，Stride设为1以保持特征图尺寸
+MobileNetV2(
+  (features): Sequential(
+    (0): Conv2dNormActivation(
+      (0): Conv2d(1, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (1): GroupNorm(8, 32, eps=1e-05, affine=True)
+      (2): ReLU6(inplace=True)
+    )
+    (1): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(32, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=32, bias=False)
+          (1): GroupNorm(8, 32, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2d(32, 16, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (2): GroupNorm(8, 16, eps=1e-05, affine=True)
+      )
+    )
+    (2): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(16, 96, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 96, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(96, 96, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), groups=96, bias=False)
+          (1): GroupNorm(8, 96, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(96, 24, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 24, eps=1e-05, affine=True)
+      )
+    )
+    (3): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(24, 144, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 144, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(144, 144, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=144, bias=False)
+          (1): GroupNorm(8, 144, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(144, 24, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 24, eps=1e-05, affine=True)
+      )
+    )
+    (4): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(24, 144, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 144, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(144, 144, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), groups=144, bias=False)
+          (1): GroupNorm(8, 144, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(144, 32, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 32, eps=1e-05, affine=True)
+      )
+    )
+    (5): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(32, 192, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 192, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(192, 192, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=192, bias=False)
+          (1): GroupNorm(8, 192, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(192, 32, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 32, eps=1e-05, affine=True)
+      )
+    )
+    (6): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(32, 192, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 192, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(192, 192, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=192, bias=False)
+          (1): GroupNorm(8, 192, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(192, 32, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 32, eps=1e-05, affine=True)
+      )
+    )
+    (7): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(32, 192, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 192, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(192, 192, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), groups=192, bias=False)
+          (1): GroupNorm(8, 192, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(192, 64, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 64, eps=1e-05, affine=True)
+      )
+    )
+    (8): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(64, 384, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 384, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(384, 384, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=384, bias=False)
+          (1): GroupNorm(8, 384, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(384, 64, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 64, eps=1e-05, affine=True)
+      )
+    )
+    (9): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(64, 384, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 384, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(384, 384, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=384, bias=False)
+          (1): GroupNorm(8, 384, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(384, 64, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 64, eps=1e-05, affine=True)
+      )
+    )
+    (10): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(64, 384, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 384, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(384, 384, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=384, bias=False)
+          (1): GroupNorm(8, 384, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(384, 64, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 64, eps=1e-05, affine=True)
+      )
+    )
+    (11): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(64, 384, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 384, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(384, 384, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=384, bias=False)
+          (1): GroupNorm(8, 384, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(384, 96, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 96, eps=1e-05, affine=True)
+      )
+    )
+    (12): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(96, 576, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 576, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(576, 576, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=576, bias=False)
+          (1): GroupNorm(8, 576, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(576, 96, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 96, eps=1e-05, affine=True)
+      )
+    )
+    (13): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(96, 576, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 576, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(576, 576, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=576, bias=False)
+          (1): GroupNorm(8, 576, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(576, 96, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 96, eps=1e-05, affine=True)
+      )
+    )
+    (14): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(96, 576, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 576, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(576, 576, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), groups=576, bias=False)
+          (1): GroupNorm(8, 576, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(576, 160, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 160, eps=1e-05, affine=True)
+      )
+    )
+    (15): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(160, 960, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 960, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(960, 960, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=960, bias=False)
+          (1): GroupNorm(8, 960, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(960, 160, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 160, eps=1e-05, affine=True)
+      )
+    )
+    (16): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(160, 960, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 960, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(960, 960, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=960, bias=False)
+          (1): GroupNorm(8, 960, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(960, 160, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 160, eps=1e-05, affine=True)
+      )
+    )
+    (17): InvertedResidual(
+      (conv): Sequential(
+        (0): Conv2dNormActivation(
+          (0): Conv2d(160, 960, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (1): GroupNorm(8, 960, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (1): Conv2dNormActivation(
+          (0): Conv2d(960, 960, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=960, bias=False)
+          (1): GroupNorm(8, 960, eps=1e-05, affine=True)
+          (2): ReLU6(inplace=True)
+        )
+        (2): Conv2d(960, 320, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (3): GroupNorm(8, 320, eps=1e-05, affine=True)
+      )
+    )
+    (18): Conv2dNormActivation(
+      (0): Conv2d(320, 1280, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      (1): GroupNorm(8, 1280, eps=1e-05, affine=True)
+      (2): ReLU6(inplace=True)
+    )
+  )
+  (classifier): Sequential(
+    (0): Dropout(p=0.2, inplace=False)
+    (1): Linear(in_features=1280, out_features=10, bias=True)
+  )
+)
+
+Join ratio / total clients: 1 / 20
+Finished creating server and clients.
+
+-------------Round number: 0-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 2.3230
+Averaged Test Accuracy: 0.0942
+Averaged Test AUC: 0.4921
+Std Test Accuracy: 0.0919
+Std Test AUC: 0.2158
+------------------------- time cost ------------------------- 88.94054317474365
+
+-------------Round number: 1-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 2.3642
+Averaged Test Accuracy: 0.0997
+Averaged Test AUC: 0.5100
+Std Test Accuracy: 0.1792
+Std Test AUC: 0.2099
+------------------------- time cost ------------------------- 75.29139995574951
+
+-------------Round number: 2-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 2.3514
+Averaged Test Accuracy: 0.0986
+Averaged Test AUC: 0.5119
+Std Test Accuracy: 0.2222
+Std Test AUC: 0.2454
+------------------------- time cost ------------------------- 87.87414908409119
+
+-------------Round number: 3-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 2.3430
+Averaged Test Accuracy: 0.0901
+Averaged Test AUC: 0.5076
+Std Test Accuracy: 0.2006
+Std Test AUC: 0.2258
+------------------------- time cost ------------------------- 88.83934283256531
+
+-------------Round number: 4-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 2.3123
+Averaged Test Accuracy: 0.0893
+Averaged Test AUC: 0.5593
+Std Test Accuracy: 0.2009
+Std Test AUC: 0.2363
+------------------------- time cost ------------------------- 88.8661949634552
+
+-------------Round number: 5-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 2.1066
+Averaged Test Accuracy: 0.2944
+Averaged Test AUC: 0.7180
+Std Test Accuracy: 0.2691
+Std Test AUC: 0.2685
+------------------------- time cost ------------------------- 88.5155394077301
+
+-------------Round number: 6-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 1.8225
+Averaged Test Accuracy: 0.5497
+Averaged Test AUC: 0.7974
+Std Test Accuracy: 0.3026
+Std Test AUC: 0.2245
+------------------------- time cost ------------------------- 88.23947167396545
+
+-------------Round number: 7-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 1.5317
+Averaged Test Accuracy: 0.5519
+Averaged Test AUC: 0.8547
+Std Test Accuracy: 0.2999
+Std Test AUC: 0.1620
+------------------------- time cost ------------------------- 88.17480063438416
+
+-------------Round number: 8-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 1.2862
+Averaged Test Accuracy: 0.6439
+Averaged Test AUC: 0.8965
+Std Test Accuracy: 0.3002
+Std Test AUC: 0.1161
+------------------------- time cost ------------------------- 87.90192008018494
+
+-------------Round number: 9-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 1.0881
+Averaged Test Accuracy: 0.6847
+Averaged Test AUC: 0.9259
+Std Test Accuracy: 0.2881
+Std Test AUC: 0.0768
+------------------------- time cost ------------------------- 88.32797384262085
+
+-------------Round number: 10-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 0.8920
+Averaged Test Accuracy: 0.7347
+Averaged Test AUC: 0.9477
+Std Test Accuracy: 0.2796
+Std Test AUC: 0.0604
+------------------------- time cost ------------------------- 89.55759572982788
+
+-------------Round number: 11-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 0.7254
+Averaged Test Accuracy: 0.7888
+Averaged Test AUC: 0.9654
+Std Test Accuracy: 0.2079
+Std Test AUC: 0.0346
+------------------------- time cost ------------------------- 88.4927237033844
+
+-------------Round number: 12-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 0.6123
+Averaged Test Accuracy: 0.8120
+Averaged Test AUC: 0.9704
+Std Test Accuracy: 0.2090
+Std Test AUC: 0.0343
+------------------------- time cost ------------------------- 88.50031995773315
+
+-------------Round number: 13-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 0.4884
+Averaged Test Accuracy: 0.8693
+Averaged Test AUC: 0.9814
+Std Test Accuracy: 0.1299
+Std Test AUC: 0.0200
+------------------------- time cost ------------------------- 88.43233370780945
+
+-------------Round number: 14-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 0.4588
+Averaged Test Accuracy: 0.8785
+Averaged Test AUC: 0.9835
+Std Test Accuracy: 0.1267
+Std Test AUC: 0.0188
+------------------------- time cost ------------------------- 88.41098284721375
+
+-------------Round number: 15-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 0.3552
+Averaged Test Accuracy: 0.9195
+Averaged Test AUC: 0.9894
+Std Test Accuracy: 0.0464
+Std Test AUC: 0.0078
+------------------------- time cost ------------------------- 88.49877858161926
+
+-------------Round number: 16-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 0.3362
+Averaged Test Accuracy: 0.9184
+Averaged Test AUC: 0.9896
+Std Test Accuracy: 0.0663
+Std Test AUC: 0.0116
+------------------------- time cost ------------------------- 88.67659640312195
+
+-------------Round number: 17-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 0.3047
+Averaged Test Accuracy: 0.9239
+Averaged Test AUC: 0.9915
+Std Test Accuracy: 0.0510
+Std Test AUC: 0.0081
+------------------------- time cost ------------------------- 88.91755700111389
+
+-------------Round number: 18-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 0.2314
+Averaged Test Accuracy: 0.9467
+Averaged Test AUC: 0.9943
+Std Test Accuracy: 0.0251
+Std Test AUC: 0.0049
+------------------------- time cost ------------------------- 88.67061758041382
+
+-------------Round number: 19-------------
+
+Evaluate global model
+Current Learning Rate: 0.050000
+Averaged Train Loss: 0.2126
+Averaged Test Accuracy: 0.9469
+Averaged Test AUC: 0.9946
+Std Test Accuracy: 0.0306
+Std Test AUC: 0.0052
+------------------------- time cost ------------------------- 88.32619524002075
+
+-------------Round number: 20-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1997
+Averaged Test Accuracy: 0.9477
+Averaged Test AUC: 0.9953
+Std Test Accuracy: 0.0256
+Std Test AUC: 0.0039
+------------------------- time cost ------------------------- 88.45638012886047
+
+-------------Round number: 21-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1787
+Averaged Test Accuracy: 0.9517
+Averaged Test AUC: 0.9956
+Std Test Accuracy: 0.0261
+Std Test AUC: 0.0042
+------------------------- time cost ------------------------- 87.93329763412476
+
+-------------Round number: 22-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1542
+Averaged Test Accuracy: 0.9569
+Averaged Test AUC: 0.9966
+Std Test Accuracy: 0.0219
+Std Test AUC: 0.0031
+------------------------- time cost ------------------------- 88.6022412776947
+
+-------------Round number: 23-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1458
+Averaged Test Accuracy: 0.9577
+Averaged Test AUC: 0.9966
+Std Test Accuracy: 0.0234
+Std Test AUC: 0.0036
+------------------------- time cost ------------------------- 88.13564896583557
+
+-------------Round number: 24-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1316
+Averaged Test Accuracy: 0.9617
+Averaged Test AUC: 0.9972
+Std Test Accuracy: 0.0198
+Std Test AUC: 0.0027
+------------------------- time cost ------------------------- 88.18451762199402
+
+-------------Round number: 25-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1390
+Averaged Test Accuracy: 0.9609
+Averaged Test AUC: 0.9970
+Std Test Accuracy: 0.0216
+Std Test AUC: 0.0029
+------------------------- time cost ------------------------- 88.13902926445007
+
+-------------Round number: 26-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1177
+Averaged Test Accuracy: 0.9631
+Averaged Test AUC: 0.9976
+Std Test Accuracy: 0.0182
+Std Test AUC: 0.0024
+------------------------- time cost ------------------------- 88.22850131988525
+
+-------------Round number: 27-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1052
+Averaged Test Accuracy: 0.9660
+Averaged Test AUC: 0.9979
+Std Test Accuracy: 0.0140
+Std Test AUC: 0.0018
+------------------------- time cost ------------------------- 88.51909756660461
+
+-------------Round number: 28-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1042
+Averaged Test Accuracy: 0.9658
+Averaged Test AUC: 0.9979
+Std Test Accuracy: 0.0170
+Std Test AUC: 0.0022
+------------------------- time cost ------------------------- 88.2896339893341
+
+-------------Round number: 29-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1057
+Averaged Test Accuracy: 0.9664
+Averaged Test AUC: 0.9979
+Std Test Accuracy: 0.0168
+Std Test AUC: 0.0021
+------------------------- time cost ------------------------- 79.73721241950989
+
+-------------Round number: 30-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.1059
+Averaged Test Accuracy: 0.9658
+Averaged Test AUC: 0.9976
+Std Test Accuracy: 0.0203
+Std Test AUC: 0.0029
+------------------------- time cost ------------------------- 88.07631230354309
+
+-------------Round number: 31-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.0960
+Averaged Test Accuracy: 0.9686
+Averaged Test AUC: 0.9979
+Std Test Accuracy: 0.0174
+Std Test AUC: 0.0025
+------------------------- time cost ------------------------- 88.70524501800537
+
+-------------Round number: 32-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.0923
+Averaged Test Accuracy: 0.9680
+Averaged Test AUC: 0.9981
+Std Test Accuracy: 0.0158
+Std Test AUC: 0.0020
+------------------------- time cost ------------------------- 88.3195071220398
+
+-------------Round number: 33-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.0844
+Averaged Test Accuracy: 0.9702
+Averaged Test AUC: 0.9983
+Std Test Accuracy: 0.0136
+Std Test AUC: 0.0017
+------------------------- time cost ------------------------- 84.45187377929688
+
+-------------Round number: 34-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.0845
+Averaged Test Accuracy: 0.9691
+Averaged Test AUC: 0.9983
+Std Test Accuracy: 0.0147
+Std Test AUC: 0.0016
+------------------------- time cost ------------------------- 88.37955927848816
+
+-------------Round number: 35-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.0765
+Averaged Test Accuracy: 0.9715
+Averaged Test AUC: 0.9984
+Std Test Accuracy: 0.0147
+Std Test AUC: 0.0017
+------------------------- time cost ------------------------- 88.1531240940094
+
+-------------Round number: 36-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.0709
+Averaged Test Accuracy: 0.9732
+Averaged Test AUC: 0.9986
+Std Test Accuracy: 0.0129
+Std Test AUC: 0.0014
+------------------------- time cost ------------------------- 88.63356614112854
+
+-------------Round number: 37-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.0714
+Averaged Test Accuracy: 0.9732
+Averaged Test AUC: 0.9985
+Std Test Accuracy: 0.0125
+Std Test AUC: 0.0016
+------------------------- time cost ------------------------- 88.36289525032043
+
+-------------Round number: 38-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.0705
+Averaged Test Accuracy: 0.9726
+Averaged Test AUC: 0.9986
+Std Test Accuracy: 0.0120
+Std Test AUC: 0.0012
+------------------------- time cost ------------------------- 88.21934771537781
+
+-------------Round number: 39-------------
+
+Evaluate global model
+Current Learning Rate: 0.010000
+Averaged Train Loss: 0.0650
+Averaged Test Accuracy: 0.9740
+Averaged Test AUC: 0.9986
+Std Test Accuracy: 0.0126
+Std Test AUC: 0.0013
+------------------------- time cost ------------------------- 88.58880138397217
+
+-------------Round number: 40-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0723
+Averaged Test Accuracy: 0.9730
+Averaged Test AUC: 0.9984
+Std Test Accuracy: 0.0163
+Std Test AUC: 0.0019
+------------------------- time cost ------------------------- 88.37759470939636
+
+-------------Round number: 41-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0635
+Averaged Test Accuracy: 0.9734
+Averaged Test AUC: 0.9987
+Std Test Accuracy: 0.0118
+Std Test AUC: 0.0011
+------------------------- time cost ------------------------- 88.00311923027039
+
+-------------Round number: 42-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0618
+Averaged Test Accuracy: 0.9747
+Averaged Test AUC: 0.9986
+Std Test Accuracy: 0.0132
+Std Test AUC: 0.0014
+------------------------- time cost ------------------------- 87.99442148208618
+
+-------------Round number: 43-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0590
+Averaged Test Accuracy: 0.9755
+Averaged Test AUC: 0.9987
+Std Test Accuracy: 0.0114
+Std Test AUC: 0.0013
+------------------------- time cost ------------------------- 87.6498475074768
+
+-------------Round number: 44-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0624
+Averaged Test Accuracy: 0.9754
+Averaged Test AUC: 0.9987
+Std Test Accuracy: 0.0121
+Std Test AUC: 0.0013
+------------------------- time cost ------------------------- 88.47204256057739
+
+-------------Round number: 45-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0601
+Averaged Test Accuracy: 0.9754
+Averaged Test AUC: 0.9986
+Std Test Accuracy: 0.0125
+Std Test AUC: 0.0014
+------------------------- time cost ------------------------- 88.52210998535156
+
+-------------Round number: 46-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0560
+Averaged Test Accuracy: 0.9754
+Averaged Test AUC: 0.9988
+Std Test Accuracy: 0.0118
+Std Test AUC: 0.0012
+------------------------- time cost ------------------------- 88.78386092185974
+
+-------------Round number: 47-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0622
+Averaged Test Accuracy: 0.9729
+Averaged Test AUC: 0.9987
+Std Test Accuracy: 0.0123
+Std Test AUC: 0.0010
+------------------------- time cost ------------------------- 88.01185369491577
+
+-------------Round number: 48-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0553
+Averaged Test Accuracy: 0.9752
+Averaged Test AUC: 0.9988
+Std Test Accuracy: 0.0119
+Std Test AUC: 0.0011
+------------------------- time cost ------------------------- 88.02909231185913
+
+-------------Round number: 49-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0491
+Averaged Test Accuracy: 0.9774
+Averaged Test AUC: 0.9989
+Std Test Accuracy: 0.0105
+Std Test AUC: 0.0010
+------------------------- time cost ------------------------- 88.32730770111084
+
+-------------Round number: 50-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0505
+Averaged Test Accuracy: 0.9765
+Averaged Test AUC: 0.9990
+Std Test Accuracy: 0.0096
+Std Test AUC: 0.0008
+------------------------- time cost ------------------------- 88.26729798316956
+
+-------------Round number: 51-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0480
+Averaged Test Accuracy: 0.9769
+Averaged Test AUC: 0.9990
+Std Test Accuracy: 0.0097
+Std Test AUC: 0.0007
+------------------------- time cost ------------------------- 88.77968239784241
+
+-------------Round number: 52-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0446
+Averaged Test Accuracy: 0.9784
+Averaged Test AUC: 0.9990
+Std Test Accuracy: 0.0103
+Std Test AUC: 0.0008
+------------------------- time cost ------------------------- 89.22976517677307
+
+-------------Round number: 53-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0443
+Averaged Test Accuracy: 0.9781
+Averaged Test AUC: 0.9990
+Std Test Accuracy: 0.0108
+Std Test AUC: 0.0009
+------------------------- time cost ------------------------- 88.19398617744446
+
+-------------Round number: 54-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0435
+Averaged Test Accuracy: 0.9775
+Averaged Test AUC: 0.9991
+Std Test Accuracy: 0.0113
+Std Test AUC: 0.0008
+------------------------- time cost ------------------------- 88.44278240203857
+
+-------------Round number: 55-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0405
+Averaged Test Accuracy: 0.9788
+Averaged Test AUC: 0.9991
+Std Test Accuracy: 0.0108
+Std Test AUC: 0.0008
+------------------------- time cost ------------------------- 88.22952008247375
+
+-------------Round number: 56-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0457
+Averaged Test Accuracy: 0.9782
+Averaged Test AUC: 0.9990
+Std Test Accuracy: 0.0120
+Std Test AUC: 0.0011
+------------------------- time cost ------------------------- 88.4844012260437
+
+-------------Round number: 57-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0422
+Averaged Test Accuracy: 0.9778
+Averaged Test AUC: 0.9991
+Std Test Accuracy: 0.0112
+Std Test AUC: 0.0009
+------------------------- time cost ------------------------- 81.36481308937073
+
+-------------Round number: 58-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0470
+Averaged Test Accuracy: 0.9771
+Averaged Test AUC: 0.9990
+Std Test Accuracy: 0.0105
+Std Test AUC: 0.0007
+------------------------- time cost ------------------------- 87.69703412055969
+
+-------------Round number: 59-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0383
+Averaged Test Accuracy: 0.9796
+Averaged Test AUC: 0.9991
+Std Test Accuracy: 0.0108
+Std Test AUC: 0.0009
+------------------------- time cost ------------------------- 88.28666615486145
+
+-------------Round number: 60-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0372
+Averaged Test Accuracy: 0.9800
+Averaged Test AUC: 0.9992
+Std Test Accuracy: 0.0103
+Std Test AUC: 0.0008
+------------------------- time cost ------------------------- 88.4471788406372
+
+-------------Round number: 61-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0355
+Averaged Test Accuracy: 0.9797
+Averaged Test AUC: 0.9992
+Std Test Accuracy: 0.0108
+Std Test AUC: 0.0007
+------------------------- time cost ------------------------- 88.43251180648804
+
+-------------Round number: 62-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0359
+Averaged Test Accuracy: 0.9798
+Averaged Test AUC: 0.9992
+Std Test Accuracy: 0.0103
+Std Test AUC: 0.0007
+------------------------- time cost ------------------------- 88.36534118652344
+
+-------------Round number: 63-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0336
+Averaged Test Accuracy: 0.9805
+Averaged Test AUC: 0.9992
+Std Test Accuracy: 0.0104
+Std Test AUC: 0.0007
+------------------------- time cost ------------------------- 88.55847382545471
+
+-------------Round number: 64-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0346
+Averaged Test Accuracy: 0.9802
+Averaged Test AUC: 0.9992
+Std Test Accuracy: 0.0110
+Std Test AUC: 0.0008
+------------------------- time cost ------------------------- 88.11817336082458
+
+-------------Round number: 65-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0314
+Averaged Test Accuracy: 0.9814
+Averaged Test AUC: 0.9992
+Std Test Accuracy: 0.0099
+Std Test AUC: 0.0007
+------------------------- time cost ------------------------- 88.15667390823364
+
+-------------Round number: 66-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0314
+Averaged Test Accuracy: 0.9810
+Averaged Test AUC: 0.9992
+Std Test Accuracy: 0.0093
+Std Test AUC: 0.0007
+------------------------- time cost ------------------------- 88.49302625656128
+
+-------------Round number: 67-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0355
+Averaged Test Accuracy: 0.9811
+Averaged Test AUC: 0.9991
+Std Test Accuracy: 0.0113
+Std Test AUC: 0.0010
+------------------------- time cost ------------------------- 88.20383810997009
+
+-------------Round number: 68-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0295
+Averaged Test Accuracy: 0.9811
+Averaged Test AUC: 0.9992
+Std Test Accuracy: 0.0103
+Std Test AUC: 0.0007
+------------------------- time cost ------------------------- 88.38222312927246
+
+-------------Round number: 69-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0305
+Averaged Test Accuracy: 0.9816
+Averaged Test AUC: 0.9992
+Std Test Accuracy: 0.0095
+Std Test AUC: 0.0006
+------------------------- time cost ------------------------- 88.38014483451843
+
+-------------Round number: 70-------------
+
+Evaluate global model
+Current Learning Rate: 0.002000
+Averaged Train Loss: 0.0330
+Averaged Test Accuracy: 0.9800
+Averaged Test AUC: 0.9992
+Std Test Accuracy: 0.0111
+Std Test AUC: 0.0008
+------------------------- time cost ------------------------- 88.17009329795837
+
+Best accuracy.
+0.9815512908384738
+
+Average time cost per round.
+87.90693089962005
+File path: ../results/MNIST_MobileNetV2_FedProx_test__acc0.9816.h5
+Model saved to: models/MNIST/MobileNetV2_FedProx_server_acc0.9816.pt
+
+Average time cost: 6245.65s.
+Length:  14
+std for best accuracy: 0.0
+mean for best accuracy: 0.9223212245830478
+All done!
+
+Storage on cuda:0
+-------------------------------------------------------------------------------
+Total Tensors: 228082812 	Used Memory: 701.80M
+The allocated memory on cuda:0: 748.07M
+Memory differs due to the matrix alignment or invisible gradient buffer tensors
+-------------------------------------------------------------------------------
