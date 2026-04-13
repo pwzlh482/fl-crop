@@ -1,0 +1,731 @@
+"""
+main_crop.py - CropV2 优化入口
+基于 main_v2.py，新增 CropV2 算法支持
+
+优化点（全面提升精度）：
+1. CropV2 = FedProx + Label Smoothing + CosineAnnealing + 动态mu衰减 + 梯度裁剪
+2. 增强数据增强：ColorJitter + RandomErasing（CIFAR-10/Crop 数据集）
+3. 支持离线预训练 ResNet18 权重
+4. Mixup 数据增强（可选）
+"""
+
+import copy
+import torch
+import argparse
+import os
+import sys
+import time
+import warnings
+import numpy as np
+import torchvision
+import torch
+import torch.nn as nn
+import copy
+import logging
+import torchvision.models as models
+
+# 原版算法导入
+from flcore.servers.serveravg import FedAvg
+from flcore.servers.serverpFedMe import pFedMe
+from flcore.servers.serverperavg import PerAvg
+from flcore.servers.serverprox import FedProx
+from flcore.servers.serverfomo import FedFomo
+from flcore.servers.serveramp import FedAMP
+from flcore.servers.servermtl import FedMTL
+from flcore.servers.serverlocal import Local
+from flcore.servers.serverper import FedPer
+from flcore.servers.serverapfl import APFL
+from flcore.servers.serverditto import Ditto
+from flcore.servers.serverrep import FedRep
+from flcore.servers.serverphp import FedPHP
+from flcore.servers.serverbn import FedBN
+from flcore.servers.serverrod import FedROD
+from flcore.servers.serverproto import FedProto
+from flcore.servers.serverdyn import FedDyn
+from flcore.servers.servermoon import MOON
+from flcore.servers.serverbabu import FedBABU
+from flcore.servers.serverapple import APPLE
+from flcore.servers.servergen import FedGen
+from flcore.servers.serverscaffold import SCAFFOLD
+from flcore.servers.serverfd import FD
+from flcore.servers.serverala import FedALA
+from flcore.servers.serverpac import FedPAC
+from flcore.servers.serverlg import LG_FedAvg
+from flcore.servers.servergc import FedGC
+from flcore.servers.serverfml import FML
+from flcore.servers.serverkd import FedKD
+from flcore.servers.serverpcl import FedPCL
+from flcore.servers.servercp import FedCP
+from flcore.servers.servergpfl import GPFL
+from flcore.servers.serverntd import FedNTD
+from flcore.servers.servergh import FedGH
+from flcore.servers.serverdbe import FedDBE
+from flcore.servers.servercac import FedCAC
+from flcore.servers.serverda import PFL_DA
+from flcore.servers.serverlc import FedLC
+from flcore.servers.serveras import FedAS
+from flcore.servers.servercross import FedCross
+
+# V2 优化版
+from flcore.servers.serverprox_v2 import FedProxV2
+from flcore.servers.server_crop_v2 import ServerCropV2
+
+from flcore.trainmodel.models import *
+from flcore.trainmodel.bilstm import *
+from flcore.trainmodel.resnet import *
+from flcore.trainmodel.alexnet import *
+from flcore.trainmodel.mobilenet_v2 import *
+from flcore.trainmodel.transformer import *
+
+from utils.result_utils import average_data
+from utils.mem_utils import MemReporter
+
+
+def setup_device(args):
+    if args.device == "cuda":
+        if args.device_id:
+            os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id
+        if not torch.cuda.is_available():
+            warnings.warn("CUDA不可用，自动切换到CPU")
+            args.device = torch.device("cpu")
+        else:
+            args.device = torch.device("cuda")
+            args.multi_gpu = torch.cuda.device_count() > 1
+    else:
+        args.device = torch.device("cpu")
+        args.multi_gpu = False
+
+
+def load_pretrained_resnet18(model, pretrained_path, num_classes):
+    """离线加载预训练ResNet18权重（不含fc层）"""
+    if not os.path.exists(pretrained_path):
+        print(f"[警告] 预训练权重文件不存在: {pretrained_path}")
+        print("将使用随机初始化继续训练")
+        return model
+
+    print(f"正在加载预训练权重: {pretrained_path}")
+    try:
+        state_dict = torch.load(pretrained_path, map_location='cpu')
+
+        # 处理 DataParallel 的 module. 前缀
+        if any(k.startswith('module.') for k in state_dict.keys()):
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                new_state_dict[k.replace('module.', '')] = v
+            state_dict = new_state_dict
+
+        # 移除 fc 层的权重（类别数不同）
+        model_dict = model.state_dict()
+        loaded_count = 0
+        skipped_keys = []
+        for k, v in state_dict.items():
+            if k in model_dict and v.shape == model_dict[k].shape:
+                model_dict[k] = v
+                loaded_count += 1
+            elif 'fc' in k:
+                skipped_keys.append(k)
+
+        model.load_state_dict(model_dict)
+        print(f"成功加载 {loaded_count}/{len(model_dict)} 层权重")
+        if skipped_keys:
+            print(f"跳过fc层(类别数不匹配): {skipped_keys}")
+    except Exception as e:
+        print(f"加载预训练权重失败: {e}")
+        print("将使用随机初始化继续训练")
+
+    return model
+
+
+logger = logging.getLogger()
+logger.setLevel(logging.ERROR)
+
+warnings.simplefilter("ignore")
+torch.manual_seed(0)
+
+
+def run(args):
+
+    time_list = []
+    reporter = MemReporter()
+    model_str = args.model
+
+    for i in range(args.prev, args.times):
+        print(f"\n============= Running time: {i}th =============")
+        print("Creating server and clients ...")
+        start = time.time()
+
+        # Generate args.model
+        if model_str == "MLR":
+            if "MNIST" in args.dataset:
+                args.model = Mclr_Logistic(1*28*28, num_classes=args.num_classes).to(args.device)
+            elif "Cifar10" in args.dataset:
+                args.model = Mclr_Logistic(3*32*32, num_classes=args.num_classes).to(args.device)
+            else:
+                args.model = Mclr_Logistic(60, num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "CNN":
+            if "Cifar10" in args.dataset:
+                args.model = FedAvgCNN(in_features=3, num_classes=args.num_classes, dim=1600).to(args.device)
+            elif "Omniglot" in args.dataset:
+                args.model = FedAvgCNN(in_features=1, num_classes=args.num_classes, dim=33856).to(args.device)
+            elif "Digit5" in args.dataset:
+                args.model = Digit5CNN().to(args.device)
+            else:
+                args.model = FedAvgCNN(in_features=3, num_classes=args.num_classes, dim=10816).to(args.device)
+
+        elif model_str == "DNN":
+            if "MNIST" in args.dataset:
+                args.model = DNN(1*28*28, 100, num_classes=args.num_classes).to(args.device)
+            elif "Cifar10" in args.dataset:
+                args.model = DNN(3*32*32, 100, num_classes=args.num_classes).to(args.device)
+            else:
+                args.model = DNN(60, 20, num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "ResNet18":
+            args.model = torchvision.models.resnet18(pretrained=False, num_classes=args.num_classes)
+
+            args.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            args.model.maxpool = nn.Identity()
+
+            # 替换 BN 为 GN (32 groups)
+            def replace_bn(module):
+                for name, child in module.named_children():
+                    if isinstance(child, nn.BatchNorm2d):
+                        setattr(module, name, nn.GroupNorm(32, child.num_features))
+                    else:
+                        replace_bn(child)
+
+            replace_bn(args.model)
+
+            # 初始化
+            for m in args.model.modules():
+                if isinstance(m, nn.Conv2d):
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.GroupNorm):
+                    nn.init.constant_(m.weight, 1)
+                    nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.Linear):
+                    nn.init.normal_(m.weight, 0, 0.01)
+                    nn.init.constant_(m.bias, 0)
+
+            # 离线加载预训练权重
+            if hasattr(args, 'pretrained_path') and args.pretrained_path:
+                args.model = load_pretrained_resnet18(args.model, args.pretrained_path, args.num_classes)
+
+            # 增强数据增强（CIFAR-10 / Crop）
+            if "Cifar10" in args.dataset or "crop" in args.dataset.lower():
+                from torchvision import transforms
+                import utils.data_utils
+
+                train_transform = transforms.Compose([
+                    transforms.RandomCrop(32, padding=4),
+                    transforms.RandomHorizontalFlip(p=0.5),
+                    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010]),
+                    transforms.RandomErasing(p=0.2, scale=(0.02, 0.1)),
+                ])
+                test_transform = transforms.Compose([
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                ])
+
+                original_read_client_data = utils.data_utils.read_client_data
+                def augmented_read_client_data(dataset, client_id, is_train=True, few_shot=None):
+                    data = original_read_client_data(dataset, client_id, is_train=is_train, few_shot=few_shot)
+                    if hasattr(data, 'dataset'):
+                        data.dataset.transform = train_transform if is_train else test_transform
+                    else:
+                        data.transform = train_transform if is_train else test_transform
+                    return data
+
+                utils.data_utils.read_client_data = augmented_read_client_data
+                print(">>> [V2增强] 已注入 ColorJitter + RandomErasing 数据增强")
+
+            elif "MNIST" in args.dataset:
+                args.model.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
+                args.model.maxpool = nn.Identity()
+            args.model = args.model.to(args.device)
+
+        elif model_str == "MobileNet":
+            args.model = models.mobilenet_v2(pretrained=False, num_classes=args.num_classes)
+
+            # 替换 BN 为 GN
+            def replace_bn(module):
+                for name, child in module.named_children():
+                    if isinstance(child, nn.BatchNorm2d):
+                        num_features = child.num_features
+                        num_groups = 8 if num_features % 8 == 0 else 4
+                        if num_features < num_groups:
+                            num_groups = 1
+                        setattr(module, name, nn.GroupNorm(num_groups, num_features))
+                    else:
+                        replace_bn(child)
+
+            replace_bn(args.model)
+
+            # 初始化
+            for m in args.model.modules():
+                if isinstance(m, nn.Conv2d):
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.GroupNorm):
+                    nn.init.constant_(m.weight, 1)
+                    nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.Linear):
+                    nn.init.normal_(m.weight, 0, 0.01)
+                    nn.init.constant_(m.bias, 0)
+
+            # 小图数据集适配
+            if "Cifar10" in args.dataset or "crop" in args.dataset.lower():
+                args.model.features[0][0].stride = (1, 1)
+                print(">>> [优化] 已修改第一层 Stride 为 1，防止小图特征丢失")
+
+                from torchvision import transforms
+                import utils.data_utils
+
+                img_size = 64
+                train_transform = transforms.Compose([
+                    transforms.Resize(img_size),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010]),
+                    transforms.RandomErasing(p=0.2, scale=(0.02, 0.1)),
+                ])
+                test_transform = transforms.Compose([
+                    transforms.Resize(img_size),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                ])
+
+                original_read_data = utils.data_utils.read_client_data
+                def augmented_read_client_data(dataset, client_id, is_train=True, few_shot=None):
+                    data = original_read_data(dataset, client_id, is_train=is_train, few_shot=few_shot)
+                    data.transform = train_transform if is_train else test_transform
+                    return data
+
+                utils.data_utils.read_client_data = augmented_read_client_data
+                print(f">>> [V2增强] 已注入数据增强并统一 Resize 至 {img_size}x{img_size}")
+
+            elif "MNIST" in args.dataset:
+                args.model.features[0][0] = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1, bias=False)
+                print(">>> [优化] 已适配 MNIST 单通道，Stride设为1以保持特征图尺寸")
+
+            args.model = args.model.to(args.device)
+
+        elif model_str == "ResNet10":
+            args.model = resnet10(num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "ResNet34":
+            args.model = torchvision.models.resnet34(pretrained=False, num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "AlexNet":
+            args.model = alexnet(pretrained=False, num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "GoogleNet":
+            args.model = torchvision.models.googlenet(pretrained=False, aux_logits=False,
+                                                      num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "MobileNet1":
+            args.model = models.mobilenet_v2(pretrained=False, num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "LSTM":
+            args.model = LSTMNet(hidden_dim=args.feature_dim, vocab_size=args.vocab_size, num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "BiLSTM":
+            args.model = BiLSTM_TextClassification(input_size=args.vocab_size, hidden_size=args.feature_dim,
+                                                   output_size=args.num_classes, num_layers=1,
+                                                   embedding_dropout=0, lstm_dropout=0, attention_dropout=0,
+                                                   embedding_length=args.feature_dim).to(args.device)
+
+        elif model_str == "fastText":
+            args.model = fastText(hidden_dim=args.feature_dim, vocab_size=args.vocab_size, num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "TextCNN":
+            args.model = TextCNN(hidden_dim=args.feature_dim, max_len=args.max_len, vocab_size=args.vocab_size,
+                                 num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "Transformer":
+            args.model = TransformerModel(ntoken=args.vocab_size, d_model=args.feature_dim, nhead=8, nlayers=2,
+                                          num_classes=args.num_classes, max_len=args.max_len).to(args.device)
+
+        elif model_str == "AmazonMLP":
+            args.model = AmazonMLP().to(args.device)
+
+        elif model_str == "HARCNN":
+            if args.dataset == 'HAR':
+                args.model = HARCNN(9, dim_hidden=1664, num_classes=args.num_classes, conv_kernel_size=(1, 9),
+                                    pool_kernel_size=(1, 2)).to(args.device)
+            elif args.dataset == 'PAMAP2':
+                args.model = HARCNN(9, dim_hidden=3712, num_classes=args.num_classes, conv_kernel_size=(1, 9),
+                                    pool_kernel_size=(1, 2)).to(args.device)
+
+        else:
+            raise NotImplementedError
+
+        args.model = args.model
+        print(args.model)
+
+        # select algorithm
+        if args.algorithm == "FedAvg":
+            args.head = copy.deepcopy(args.model.module.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedAvg(args, i)
+
+        elif args.algorithm == "Local":
+            server = Local(args, i)
+
+        elif args.algorithm == "FedMTL":
+            server = FedMTL(args, i)
+
+        elif args.algorithm == "PerAvg":
+            server = PerAvg(args, i)
+
+        elif args.algorithm == "pFedMe":
+            server = pFedMe(args, i)
+
+        elif args.algorithm == "FedProx":
+            server = FedProx(args, i)
+
+        # ===== V2 优化版 FedProx =====
+        elif args.algorithm == "FedProxV2":
+            server = FedProxV2(args, i)
+
+        # ===== CropV2 优化版（完整优化：动态mu + CosineAnnealing + Label Smoothing + 梯度裁剪） =====
+        elif args.algorithm == "CropV2":
+            server = ServerCropV2(args, i)
+
+        elif args.algorithm == "FedFomo":
+            server = FedFomo(args, i)
+
+        elif args.algorithm == "FedAMP":
+            server = FedAMP(args, i)
+
+        elif args.algorithm == "APFL":
+            server = APFL(args, i)
+
+        elif args.algorithm == "FedPer":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedPer(args, i)
+
+        elif args.algorithm == "Ditto":
+            server = Ditto(args, i)
+
+        elif args.algorithm == "FedRep":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedRep(args, i)
+
+        elif args.algorithm == "FedPHP":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedPHP(args, i)
+
+        elif args.algorithm == "FedBN":
+            server = FedBN(args, i)
+
+        elif args.algorithm == "FedROD":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedROD(args, i)
+
+        elif args.algorithm == "FedProto":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedProto(args, i)
+
+        elif args.algorithm == "FedDyn":
+            server = FedDyn(args, i)
+
+        elif args.algorithm == "MOON":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = MOON(args, i)
+
+        elif args.algorithm == "FedBABU":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedBABU(args, i)
+
+        elif args.algorithm == "APPLE":
+            server = APPLE(args, i)
+
+        elif args.algorithm == "FedGen":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedGen(args, i)
+
+        elif args.algorithm == "SCAFFOLD":
+            server = SCAFFOLD(args, i)
+
+        elif args.algorithm == "FD":
+            server = FD(args, i)
+
+        elif args.algorithm == "FedALA":
+            server = FedALA(args, i)
+
+        elif args.algorithm == "FedPAC":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedPAC(args, i)
+
+        elif args.algorithm == "LG-FedAvg":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = LG_FedAvg(args, i)
+
+        elif args.algorithm == "FedGC":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedGC(args, i)
+
+        elif args.algorithm == "FML":
+            server = FML(args, i)
+
+        elif args.algorithm == "FedKD":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedKD(args, i)
+
+        elif args.algorithm == "FedPCL":
+            args.model.fc = nn.Identity()
+            server = FedPCL(args, i)
+
+        elif args.algorithm == "FedCP":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedCP(args, i)
+
+        elif args.algorithm == "GPFL":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = GPFL(args, i)
+
+        elif args.algorithm == "FedNTD":
+            server = FedNTD(args, i)
+
+        elif args.algorithm == "FedGH":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedGH(args, i)
+
+        elif args.algorithm == "FedDBE":
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedDBE(args, i)
+
+        elif args.algorithm == 'FedCAC':
+            server = FedCAC(args, i)
+
+        elif args.algorithm == 'PFL-DA':
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = PFL_DA(args, i)
+
+        elif args.algorithm == 'FedLC':
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedLC(args, i)
+
+        elif args.algorithm == 'FedAS':
+            args.head = copy.deepcopy(args.model.fc)
+            args.model.fc = nn.Identity()
+            args.model = BaseHeadSplit(args.model, args.head)
+            server = FedAS(args, i)
+
+        elif args.algorithm == "FedCross":
+            server = FedCross(args, i)
+
+        else:
+            raise NotImplementedError
+
+        server.train()
+
+        time_list.append(time.time() - start)
+
+    print(f"\nAverage time cost: {round(np.average(time_list), 2)}s.")
+
+    # Global average
+    average_data(dataset=args.dataset, algorithm=args.algorithm, goal=args.goal, times=args.times)
+
+    print("All done!")
+
+    reporter.report()
+
+
+if __name__ == "__main__":
+    total_start = time.time()
+
+    parser = argparse.ArgumentParser()
+    # general
+    parser.add_argument('-go', "--goal", type=str, default="test",
+                        help="The goal for this experiment")
+    parser.add_argument('-dev', "--device", type=str, default="cuda",
+                        choices=["cpu", "cuda"])
+    parser.add_argument('-did', "--device_id", type=str, default="0")
+    parser.add_argument('-data', "--dataset", type=str, default="Cifar10")
+    parser.add_argument('-ncl', "--num_classes", type=int, default=10)
+    parser.add_argument('-m', "--model", type=str, default="MobileNet")
+    parser.add_argument('-lbs', "--batch_size", type=int, default=64)
+    parser.add_argument('-lr', "--local_learning_rate", type=float, default=0.01,
+                        help="Local learning rate")
+    parser.add_argument('-ld', "--learning_rate_decay", type=bool, default=True)
+    parser.add_argument('-ldg', "--learning_rate_decay_gamma", type=float, default=0.2)
+    parser.add_argument('-ldm', "--lr_decay_milestones", type=int, nargs='+', default=[20, 40],
+                        help="轮次节点，比如输入 80 120 表示在80、120轮衰减学习率")
+    parser.add_argument('-gr', "--global_rounds", type=int, default=70)
+    parser.add_argument('-tc', "--top_cnt", type=int, default=10,
+                        help="For auto_break")
+    parser.add_argument('-ls', "--local_epochs", type=int, default=1,
+                        help="Multiple update steps in one local epoch.")
+    parser.add_argument('-algo', "--algorithm", type=str, default="CropV2")
+
+    parser.add_argument('--weight-decay', '--wd', dest='weight_decay', default=1e-4, type=float,
+                        help='weight decay')
+    parser.add_argument('-jr', "--join_ratio", type=float, default=1,
+                        help="Ratio of clients per round")
+    parser.add_argument('-rjr', "--random_join_ratio", type=bool, default=False,
+                        help="Random ratio of clients per round")
+    parser.add_argument('-nc', "--num_clients", type=int, default=20,
+                        help="Total number of clients")
+    parser.add_argument('-pv', "--prev", type=int, default=0,
+                        help="Previous Running times")
+    parser.add_argument('-t', "--times", type=int, default=1,
+                        help="Running times")
+    parser.add_argument('-eg', "--eval_gap", type=int, default=1,
+                        help="Rounds gap for evaluation")
+    parser.add_argument('-sfn', "--save_folder_name", type=str, default='items')
+    parser.add_argument('-ab', "--auto_break", type=bool, default=True)
+    parser.add_argument('-dlg', "--dlg_eval", type=bool, default=False)
+    parser.add_argument('-dlgg', "--dlg_gap", type=int, default=100)
+    parser.add_argument('-bnpc', "--batch_num_per_client", type=int, default=10)
+    parser.add_argument('-nnc', "--num_new_clients", type=int, default=0)
+    parser.add_argument('-ften', "--fine_tuning_epoch_new", type=int, default=0)
+    parser.add_argument('-fd', "--feature_dim", type=int, default=512)
+    parser.add_argument('-vs', "--vocab_size", type=int, default=80,
+                        help="Set this for text tasks.")
+    parser.add_argument('-ml', "--max_len", type=int, default=200)
+    parser.add_argument('-fs', "--few_shot", type=int, default=0)
+    # practical
+    parser.add_argument('-cdr', "--client_drop_rate", type=float, default=0.0)
+    parser.add_argument('-tsr', "--train_slow_rate", type=float, default=0.0)
+    parser.add_argument('-ssr', "--send_slow_rate", type=float, default=0.0)
+    parser.add_argument('-ts', "--time_select", type=bool, default=False)
+    parser.add_argument('-tth', "--time_threthold", type=float, default=10000)
+    # pFedMe / PerAvg / FedProx / FedAMP / FedPHP / GPFL / FedCAC
+    parser.add_argument('-bt', "--beta", type=float, default=0.0)
+    parser.add_argument('-lam', "--lamda", type=float, default=1.0)
+    parser.add_argument('-mu', "--mu", type=float, default=0.01)
+    parser.add_argument('-K', "--K", type=int, default=5)
+    parser.add_argument('-lrp', "--p_learning_rate", type=float, default=0.01)
+    # FedFomo
+    parser.add_argument('-M', "--M", type=int, default=5)
+    # FedMTL
+    parser.add_argument('-itk', "--itk", type=int, default=4000)
+    # FedAMP
+    parser.add_argument('-alk', "--alphaK", type=float, default=1.0)
+    parser.add_argument('-sg', "--sigma", type=float, default=1.0)
+    # APFL / FedCross
+    parser.add_argument('-al', "--alpha", type=float, default=1.0)
+    # Ditto / FedRep
+    parser.add_argument('-pls', "--plocal_epochs", type=int, default=1)
+    # MOON / FedCAC / FedLC
+    parser.add_argument('-tau', "--tau", type=float, default=1.0)
+    # FedBABU
+    parser.add_argument('-fte', "--fine_tuning_epochs", type=int, default=10)
+    # APPLE
+    parser.add_argument('-dlr', "--dr_learning_rate", type=float, default=0.0)
+    parser.add_argument('-L', "--L", type=float, default=1.0)
+    # FedGen
+    parser.add_argument('-nd', "--noise_dim", type=int, default=512)
+    parser.add_argument('-glr', "--generator_learning_rate", type=float, default=0.005)
+    parser.add_argument('-hd', "--hidden_dim", type=int, default=512)
+    parser.add_argument('-se', "--server_epochs", type=int, default=1000)
+    parser.add_argument('-lf', "--localize_feature_extractor", type=bool, default=False)
+    # SCAFFOLD / FedGH
+    parser.add_argument('-slr', "--server_learning_rate", type=float, default=1.0)
+    # FedALA
+    parser.add_argument('-et', "--eta", type=float, default=1.0)
+    parser.add_argument('-s', "--rand_percent", type=int, default=80)
+    parser.add_argument('-p', "--layer_idx", type=int, default=2)
+    # FedKD
+    parser.add_argument('-mlr', "--mentee_learning_rate", type=float, default=0.005)
+    parser.add_argument('-Ts', "--T_start", type=float, default=0.95)
+    parser.add_argument('-Te', "--T_end", type=float, default=0.98)
+    # FedDBE
+    parser.add_argument('-mo', "--momentum", type=float, default=0.9)
+    parser.add_argument('-klw', "--kl_weight", type=float, default=0.0)
+
+    # FedCross
+    parser.add_argument('-fsb', "--first_stage_bound", type=int, default=0)
+    parser.add_argument('-ca', "--fedcross_alpha", type=float, default=0.99)
+    parser.add_argument('-cmss', "--collaberative_model_select_strategy", type=int, default=1)
+
+    # ===== V2 / CropV2 新增参数 =====
+    parser.add_argument('-wr', "--warmup_rounds", type=int, default=5,
+                        help="Warmup rounds for V2 (linear warmup)")
+    parser.add_argument('-pp', "--pretrained_path", type=str, default="",
+                        help="离线预训练权重路径")
+    parser.add_argument('-mn', "--model_name", type=str, default="",
+                        help="模型名称，用于保存文件命名")
+
+    args = parser.parse_args()
+
+    if args.device == "cuda" and args.device_id:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id
+    setup_device(args)
+    if args.device == "cuda" and not torch.cuda.is_available():
+        print("\ncuda is not avaiable.\n")
+        args.device = torch.device("cpu")
+        args.multi_gpu = False
+
+    import torch
+    import os
+
+    total_clients = args.num_clients
+
+    if args.device == "cuda" and "," in args.device_id:
+        num_gpus = len(args.device_id.split(','))
+        available_gpus = [torch.device(f"cuda:{i}") for i in range(num_gpus)]
+    else:
+        available_gpus = [torch.device(args.device)]
+
+    args.client_device_map = {}
+    for client_id in range(total_clients):
+        gpu_idx = client_id % len(available_gpus)
+        args.client_device_map[client_id] = available_gpus[gpu_idx]
+
+    # 自动设置 model_name（用于保存结果文件命名）
+    if not args.model_name:
+        args.model_name = args.model
+
+    print("=" * 50)
+    for arg in vars(args):
+        print(arg, '=', getattr(args, arg))
+    print("=" * 50)
+
+    run(args)
