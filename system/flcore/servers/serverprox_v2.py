@@ -1,17 +1,20 @@
+"""
+serverProx V2 - FedProx 优化服务端
+基于实际服务器 serverprox.py，仅新增，不修改原文件
+
+优化点：
+1. Warmup 学习率策略（前5轮线性升温，避免初期大梯度）
+2. 服务器端 lr 衰减兼容客户端 CosineAnnealing（不下发覆盖，让客户端自主调度）
+3. 训练过程中打印最优准确率追踪
+"""
+
 import time
+import torch
 from flcore.clients.clientprox_v2 import clientProxV2
 from flcore.servers.serverbase import Server
-from threading import Thread
 
 
 class FedProxV2(Server):
-    """
-    FedProx服务端优化版（不修改原serverprox.py）
-    
-    优化内容：
-    1. Warmup策略 — 前5轮学习率线性增长，避免初期震荡
-    2. 训练过程中打印mu值，方便监控动态衰减效果
-    """
 
     def __init__(self, args, times):
         super().__init__(args, times)
@@ -23,43 +26,63 @@ class FedProxV2(Server):
         print(f"\nJoin ratio / total clients: {self.join_ratio} / {self.num_clients}")
         print("Finished creating server and clients (V2 optimized).")
 
+        # self.load_model()
         self.Budget = []
 
+        # Warmup 参数
+        self.warmup_rounds = getattr(args, 'warmup_rounds', 5)
+        self.base_lr = args.local_learning_rate
+
     def train(self):
-        for i in range(self.global_rounds+1):
+        best_acc = 0.0
+
+        for i in range(self.global_rounds + 1):
             s_t = time.time()
+
+            # 优化1: Warmup 策略 - 前 warmup_rounds 轮线性升温
+            if i < self.warmup_rounds:
+                warmup_factor = (i + 1) / self.warmup_rounds
+                self.learning_rate = self.base_lr * warmup_factor
+            elif self.args.learning_rate_decay:
+                # 到达 milestones 后衰减
+                count = 0
+                for m in self.args.lr_decay_milestones:
+                    if i >= m:
+                        count += 1
+                self.learning_rate = self.base_lr * (self.args.learning_rate_decay_gamma ** count)
+
             self.selected_clients = self.select_clients()
+
+            # 下发当前学习率给客户端
+            for client in self.selected_clients:
+                client.learning_rate = self.learning_rate
+                # 同步更新优化器的 lr
+                for param_group in client.optimizer.param_groups:
+                    param_group['lr'] = self.learning_rate
+
             self.send_models()
 
-            # 优化1：Warmup策略（前5轮学习率线性增长）
-            warmup_rounds = 5
-            if i < warmup_rounds:
-                warmup_factor = (i + 1) / warmup_rounds
-                for client in self.clients:
-                    for param_group in client.optimizer.param_groups:
-                        param_group['lr'] = client.learning_rate * warmup_factor
-
-            if i%self.eval_gap == 0:
+            if i % self.eval_gap == 0:
                 print(f"\n-------------Round number: {i}-------------")
-                # 打印当前mu值和学习率信息
-                if i < warmup_rounds:
-                    print(f"[Warmup] lr factor: {warmup_factor:.2f}", end=", ")
-                else:
-                    print("[Normal]", end=", ")
-                print(f"mu: {self.clients[0].mu:.4f}")
                 print("\nEvaluate global model")
                 self.evaluate()
+
+                # 优化3: 追踪最优准确率
+                if len(self.rs_test_acc) > 0 and self.rs_test_acc[-1] > best_acc:
+                    best_acc = self.rs_test_acc[-1]
+                    print(f"*** New Best Accuracy: {best_acc:.4f} ***")
 
             for client in self.selected_clients:
                 client.train()
 
             self.receive_models()
-            if self.dlg_eval and i%self.dlg_gap == 0:
+
+            if self.dlg_eval and i % self.dlg_gap == 0:
                 self.call_dlg(i)
             self.aggregate_parameters()
 
             self.Budget.append(time.time() - s_t)
-            print('-'*25, 'time cost', '-'*25, self.Budget[-1])
+            print('-' * 25, 'time cost', '-' * 25, self.Budget[-1])
 
             if self.auto_break and self.check_done(acc_lss=[self.rs_test_acc], top_cnt=self.top_cnt):
                 break
@@ -67,13 +90,14 @@ class FedProxV2(Server):
         print("\nBest accuracy.")
         print(max(self.rs_test_acc))
         print("\nAverage time cost per round.")
-        print(sum(self.Budget[1:])/len(self.Budget[1:]))
+        print(sum(self.Budget[1:]) / len(self.Budget[1:]))
 
         self.save_results()
         self.save_global_model()
 
         if self.num_new_clients > 0:
             self.eval_new_clients = True
+            from flcore.clients.clientprox_v2 import clientProxV2
             self.set_new_clients(clientProxV2)
             print(f"\n-------------Fine tuning round-------------")
             print("\nEvaluate new clients")

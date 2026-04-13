@@ -1,51 +1,61 @@
+"""
+clientProx V2 - FedProx 优化客户端
+基于实际服务器 clientprox.py，仅新增，不修改原文件
+
+优化点：
+1. Label Smoothing (0.1) 防止过拟合
+2. PerturbedGradientDescent1 替代原版 SGD，支持 momentum + weight_decay
+3. CosineAnnealingWarmRestarts 学习率调度（替代 MultiStepLR，收敛更平滑）
+4. 梯度裁剪 max_norm=5.0 防止梯度爆炸
+"""
+
 import torch
 import numpy as np
 import time
 import copy
 import torch.nn as nn
-from flcore.optimizers.fedoptimizer import PerturbedGradientDescent
+from flcore.optimizers.fedoptimizer import PerturbedGradientDescent, PerturbedGradientDescent1
 from flcore.clients.clientbase import Client
 
 
 class clientProxV2(Client):
-    """
-    FedProx客户端优化版（不修改原clientprox.py）
-    
-    优化内容：
-    1. 标签平滑（label_smoothing=0.1）— 防止模型过度自信
-    2. 余弦退火学习率 — 替代ExponentialLR，训练更稳定
-    3. mu动态衰减 — 前期抑制漂移，后期释放个性化能力
-    """
-
     def __init__(self, args, id, train_samples, test_samples, **kwargs):
         super().__init__(args, id, train_samples, test_samples, **kwargs)
 
         self.mu = args.mu
-        self.initial_mu = args.mu  # 保存初始mu，用于动态衰减
-
+        self.momentum = getattr(args, 'momentum', 0.9)
+        self.weight_decay = getattr(args, 'weight_decay', 1e-4)
         self.global_params = copy.deepcopy(list(self.model.parameters()))
 
-        # 优化1：标签平滑
+        # 优化1: Label Smoothing 防止过拟合
         self.loss = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-        self.optimizer = PerturbedGradientDescent(
-            self.model.parameters(), lr=self.learning_rate, mu=self.mu)
+        self.learning_rate_decay = args.learning_rate_decay
 
-        # 优化2：余弦退火学习率
-        self.learning_rate_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        # 优化2: 使用 PerturbedGradientDescent1 (带 momentum + weight_decay)
+        self.optimizer = PerturbedGradientDescent1(
+            self.model.parameters(),
+            lr=self.learning_rate,
+            mu=self.mu,
+            momentum=self.momentum,
+            weight_decay=self.weight_decay
+        )
+
+        # 优化3: CosineAnnealingWarmRestarts 替代 MultiStepLR
+        # T_0=10 表示每10轮一个余弦周期，T_mult=2 表示周期翻倍
+        self.learning_rate_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer=self.optimizer,
-            T_max=args.local_epochs * 3,
+            T_0=10,
+            T_mult=2,
             eta_min=self.learning_rate * 0.01
         )
 
-        # 优化3：mu动态衰减
-        self.current_round = 0
-        self.total_rounds = args.global_rounds
+        # 梯度裁剪阈值
+        self.max_grad_norm = 5.0
 
     def train(self):
         trainloader = self.load_train_data()
         start_time = time.time()
-
         self.model.train()
 
         max_local_epochs = self.local_epochs
@@ -54,20 +64,27 @@ class clientProxV2(Client):
 
         for epoch in range(max_local_epochs):
             for x, y in trainloader:
-                if type(x) == type([]):
-                    x[0] = x[0].to(self.device)
-                else:
-                    x = x.to(self.device)
-                y = y.to(self.device)
-                if self.train_slow:
-                    time.sleep(0.1 * np.abs(np.random.rand()))
+                x, y = x.to(self.device), y.to(self.device)
 
+                self.optimizer.zero_grad()
                 output = self.model(x)
                 loss = self.loss(output, y)
-                self.optimizer.zero_grad()
+
+                # FedProx 核心：手动添加近端项
+                if self.mu > 0:
+                    proximal_term = 0.0
+                    for w, w_t in zip(self.model.parameters(), self.global_params):
+                        proximal_term += (w - w_t).norm(2)**2
+                    loss += (self.mu / 2) * proximal_term
+
                 loss.backward()
+
+                # 优化4: 梯度裁剪防止爆炸
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+
                 self.optimizer.step(self.global_params, self.device)
 
+        # 学习率调度（由客户端自主调度，与服务器端lr控制独立）
         if self.learning_rate_decay:
             self.learning_rate_scheduler.step()
 
@@ -78,14 +95,6 @@ class clientProxV2(Client):
         for new_param, global_param, param in zip(model.parameters(), self.global_params, self.model.parameters()):
             global_param.data = new_param.data.clone()
             param.data = new_param.data.clone()
-
-        # 优化3：mu动态衰减
-        self.current_round += 1
-        if self.total_rounds > 0:
-            decay_ratio = 1.0 - (self.current_round / self.total_rounds)
-            self.mu = max(self.initial_mu * decay_ratio, 0.001)
-            for param_group in self.optimizer.param_groups:
-                param_group['mu'] = self.mu
 
     def train_metrics(self):
         trainloader = self.load_train_data()

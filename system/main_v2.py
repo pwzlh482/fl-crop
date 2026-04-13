@@ -1,4 +1,15 @@
 #!/usr/bin/env python
+"""
+main_v2.py - 优化版入口
+基于实际服务器 main.py，仅新增，不修改原文件
+
+优化点：
+1. 使用 FedProxV2（label_smoothing + momentum + CosineAnnealing + 梯度裁剪 + Warmup）
+2. 支持离线加载预训练 ResNet18 权重
+3. 优化默认参数（更适合CIFAR10训练）
+4. 新增 warmup_rounds 参数
+"""
+
 import copy
 import torch
 import argparse
@@ -13,11 +24,12 @@ import torch.nn as nn
 import copy
 import logging
 import torchvision.models as models
+
+# 原版算法导入（保持兼容）
 from flcore.servers.serveravg import FedAvg
 from flcore.servers.serverpFedMe import pFedMe
 from flcore.servers.serverperavg import PerAvg
 from flcore.servers.serverprox import FedProx
-from flcore.servers.serverprox_v2 import FedProxV2
 from flcore.servers.serverfomo import FedFomo
 from flcore.servers.serveramp import FedAMP
 from flcore.servers.servermtl import FedMTL
@@ -55,8 +67,10 @@ from flcore.servers.serverlc import FedLC
 from flcore.servers.serveras import FedAS
 from flcore.servers.servercross import FedCross
 
-from flcore.trainmodel.models import *
+# V2 优化版 FedProx
+from flcore.servers.serverprox_v2 import FedProxV2
 
+from flcore.trainmodel.models import *
 from flcore.trainmodel.bilstm import *
 from flcore.trainmodel.resnet import *
 from flcore.trainmodel.alexnet import *
@@ -67,32 +81,121 @@ from utils.result_utils import average_data
 from utils.mem_utils import MemReporter
 
 
-# -------------------------- 新增：多卡并行适配（仅新增，不修改原有逻辑） --------------------------
+class ResNet_Cifar(nn.Module):
+
+    def __init__(self, block, layers, num_classes=10):
+        super(ResNet_Cifar, self).__init__()
+        self.inplanes = 16
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.relu = nn.ReLU(inplace=True)
+        self.layer1 = self._make_layer(block, 16, layers[0])
+        self.layer2 = self._make_layer(block, 32, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 64, layers[2], stride=2)
+        self.avgpool = nn.AvgPool2d(8, stride=1)
+        self.fc = nn.Linear(64 * block.expansion, num_classes)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion)
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+
+        return x
+
+
 def setup_device(args):
-    """适配device和device_id，支持多卡"""
     if args.device == "cuda":
-        # 设置可见GPU
         if args.device_id:
             os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id
-        # 检查GPU可用性
         if not torch.cuda.is_available():
             warnings.warn("CUDA不可用，自动切换到CPU")
             args.device = torch.device("cpu")
         else:
             args.device = torch.device("cuda")
-            # 多卡时封装模型为DataParallel
             args.multi_gpu = torch.cuda.device_count() > 1
     else:
         args.device = torch.device("cpu")
         args.multi_gpu = False
 
+
 def wrap_model_for_parallel(model, args):
-    """多卡模型封装（仅多卡时生效）"""
-    if args.multi_gpu and args.device.type == "cuda":
+    if args.device.type == "cuda":
         model = nn.DataParallel(model)
-        print(f"[Multi-GPU] 启用 {torch.cuda.device_count()} 个GPU并行训练")
     return model
-    
+
+
+def load_pretrained_resnet18(model, pretrained_path, num_classes):
+    """离线加载预训练ResNet18权重（不含fc层）"""
+    if not os.path.exists(pretrained_path):
+        print(f"[警告] 预训练权重文件不存在: {pretrained_path}")
+        print("将使用随机初始化继续训练")
+        return model
+
+    print(f"正在加载预训练权重: {pretrained_path}")
+    try:
+        state_dict = torch.load(pretrained_path, map_location='cpu')
+
+        # 处理 DataParallel 的 module. 前缀
+        if any(k.startswith('module.') for k in state_dict.keys()):
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                new_state_dict[k.replace('module.', '')] = v
+            state_dict = new_state_dict
+
+        # 移除 fc 层的权重（类别数不同）
+        model_dict = model.state_dict()
+        loaded_count = 0
+        skipped_keys = []
+        for k, v in state_dict.items():
+            if k in model_dict and v.shape == model_dict[k].shape:
+                model_dict[k] = v
+                loaded_count += 1
+            elif 'fc' in k:
+                skipped_keys.append(k)
+
+        model.load_state_dict(model_dict)
+        print(f"成功加载 {loaded_count}/{len(model_dict)} 层权重")
+        if skipped_keys:
+            print(f"跳过fc层(类别数不匹配): {skipped_keys}")
+    except Exception as e:
+        print(f"加载预训练权重失败: {e}")
+        print("将使用随机初始化继续训练")
+
+    return model
+
+
 logger = logging.getLogger()
 logger.setLevel(logging.ERROR)
 
@@ -112,7 +215,7 @@ def run(args):
         start = time.time()
 
         # Generate args.model
-        if model_str == "MLR": # convex
+        if model_str == "MLR":
             if "MNIST" in args.dataset:
                 args.model = Mclr_Logistic(1*28*28, num_classes=args.num_classes).to(args.device)
             elif "Cifar10" in args.dataset:
@@ -120,20 +223,17 @@ def run(args):
             else:
                 args.model = Mclr_Logistic(60, num_classes=args.num_classes).to(args.device)
 
-        elif model_str == "CNN": # non-convex
-            #if "MNIST" in args.dataset:
-                #args.model = FedAvgCNN(in_features=1, num_classes=args.num_classes, dim=1024).to(args.device)
+        elif model_str == "CNN":
             if "Cifar10" in args.dataset:
                 args.model = FedAvgCNN(in_features=3, num_classes=args.num_classes, dim=1600).to(args.device)
             elif "Omniglot" in args.dataset:
                 args.model = FedAvgCNN(in_features=1, num_classes=args.num_classes, dim=33856).to(args.device)
-                # args.model = CifarNet(num_classes=args.num_classes).to(args.device)
             elif "Digit5" in args.dataset:
                 args.model = Digit5CNN().to(args.device)
             else:
                 args.model = FedAvgCNN(in_features=3, num_classes=args.num_classes, dim=10816).to(args.device)
 
-        elif model_str == "DNN": # non-convex
+        elif model_str == "DNN":
             if "MNIST" in args.dataset:
                 args.model = DNN(1*28*28, 100, num_classes=args.num_classes).to(args.device)
             elif "Cifar10" in args.dataset:
@@ -141,42 +241,89 @@ def run(args):
             else:
                 args.model = DNN(60, 20, num_classes=args.num_classes).to(args.device)
 
-        elif model_str == "ResNet181":
-            args.model = torchvision.models.resnet18(pretrained=False, num_classes=args.num_classes)
-            if "Cifar10" in args.dataset:
-                args.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-                args.model.maxpool = nn.Identity()
-            args.model = args.model.to(args.device)
-            
         elif model_str == "ResNet18":
             args.model = torchvision.models.resnet18(pretrained=False, num_classes=args.num_classes)
 
-            # 1. 加载本地预训练权重（如果存在）
-            pretrained_path = os.path.join(os.getcwd(), 'resnet18_imagenet.pth')
-            if not os.path.exists(pretrained_path):
-                import inspect
-                script_dir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-                pretrained_path = os.path.join(script_dir, 'resnet18_imagenet.pth')
-            if os.path.exists(pretrained_path):
-                pretrained_dict = torch.load(pretrained_path, map_location='cpu')
-                model_dict = args.model.state_dict()
-                pretrained_dict = {k: v for k, v in pretrained_dict.items()
-                                   if k in model_dict and v.shape == model_dict[k].shape}
-                model_dict.update(pretrained_dict)
-                args.model.load_state_dict(model_dict)
-                print(f"Loaded pretrained weights: {len(pretrained_dict)}/{len(model_dict)} layers")
-            else:
-                print("No pretrained weights found, using random initialization")
+            args.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            args.model.maxpool = nn.Identity()
 
-            # 2. 替换 BN 为 GN
+            # 替换 BN 为 GN (32 groups)
             def replace_bn(module):
                 for name, child in module.named_children():
                     if isinstance(child, nn.BatchNorm2d):
-                        setattr(module, name, nn.GroupNorm(2, child.num_features))
-                    else: replace_bn(child)
+                        setattr(module, name, nn.GroupNorm(32, child.num_features))
+                    else:
+                        replace_bn(child)
+
             replace_bn(args.model)
 
-            # 3. Kaiming 初始化（仅初始化未加载预训练权重的层）
+            # 初始化
+            for m in args.model.modules():
+                if isinstance(m, nn.Conv2d):
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.GroupNorm):
+                    nn.init.constant_(m.weight, 1)
+                    nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.Linear):
+                    nn.init.normal_(m.weight, 0, 0.01)
+                    nn.init.constant_(m.bias, 0)
+
+            # 离线加载预训练权重（如果指定了路径）
+            if hasattr(args, 'pretrained_path') and args.pretrained_path:
+                args.model = load_pretrained_resnet18(args.model, args.pretrained_path, args.num_classes)
+
+            # CIFAR10 数据增强
+            if "Cifar10" in args.dataset:
+                from torchvision import transforms
+                import utils.data_utils
+
+                train_transform = transforms.Compose([
+                    transforms.RandomCrop(32, padding=4),
+                    transforms.RandomHorizontalFlip(p=0.5),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                ])
+                test_transform = transforms.Compose([
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                ])
+
+                original_read_client_data = utils.data_utils.read_client_data
+                def augmented_read_client_data(dataset, client_id, is_train=True, few_shot=None):
+                    data = original_read_client_data(dataset, client_id, is_train=is_train, few_shot=few_shot)
+                    if hasattr(data, 'dataset'):
+                        data.dataset.transform = train_transform if is_train else test_transform
+                    else:
+                        data.transform = train_transform if is_train else test_transform
+                    return data
+
+                utils.data_utils.read_client_data = augmented_read_client_data
+
+            elif "MNIST" in args.dataset:
+                args.model.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
+                args.model.maxpool = nn.Identity()
+            args.model = args.model.to(args.device)
+
+        elif model_str == "MobileNet":
+            args.model = models.mobilenet_v2(pretrained=False, num_classes=args.num_classes)
+
+            # 替换 BN 为 GN
+            def replace_bn(module):
+                for name, child in module.named_children():
+                    if isinstance(child, nn.BatchNorm2d):
+                        num_features = child.num_features
+                        num_groups = 8 if num_features % 8 == 0 else 4
+                        if num_features < num_groups:
+                            num_groups = 1
+                        setattr(module, name, nn.GroupNorm(num_groups, num_features))
+                    else:
+                        replace_bn(child)
+
+            replace_bn(args.model)
+
+            # 初始化
             for m in args.model.modules():
                 if isinstance(m, nn.Conv2d):
                     nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -186,87 +333,101 @@ def run(args):
                     nn.init.constant_(m.weight, 1)
                     nn.init.constant_(m.bias, 0)
                 elif isinstance(m, nn.Linear):
-                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    nn.init.normal_(m.weight, 0, 0.01)
                     nn.init.constant_(m.bias, 0)
 
-            # 4. 尺寸适配
+            # 小图数据集适配
             if "Cifar10" in args.dataset:
-                args.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-                args.model.maxpool = nn.Identity()
+                args.model.features[0][0].stride = (1, 1)
+                print(">>> [优化] 已修改第一层 Stride 为 1，防止小图特征丢失")
+
+                from torchvision import transforms
+                import utils.data_utils
+
+                img_size = 64
+                train_transform = transforms.Compose([
+                    transforms.Resize(img_size),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                ])
+                test_transform = transforms.Compose([
+                    transforms.Resize(img_size),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+                ])
+
+                original_read_data = utils.data_utils.read_client_data
+                def augmented_read_client_data(dataset, client_id, is_train=True, few_shot=None):
+                    data = original_read_data(dataset, client_id, is_train=is_train, few_shot=few_shot)
+                    data.transform = train_transform if is_train else test_transform
+                    return data
+
+                utils.data_utils.read_client_data = augmented_read_client_data
+                print(f">>> [准确率补丁] 已注入数据增强并统一 Resize 至 {img_size}x{img_size}")
+
+            elif "MNIST" in args.dataset:
+                args.model.features[0][0] = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1, bias=False)
+                print(">>> [优化] 已适配 MNIST 单通道，Stride设为1以保持特征图尺寸")
 
             args.model = args.model.to(args.device)
 
-            
-        
         elif model_str == "ResNet10":
             args.model = resnet10(num_classes=args.num_classes).to(args.device)
-        
+
         elif model_str == "ResNet34":
             args.model = torchvision.models.resnet34(pretrained=False, num_classes=args.num_classes).to(args.device)
 
         elif model_str == "AlexNet":
             args.model = alexnet(pretrained=False, num_classes=args.num_classes).to(args.device)
-            
-            # args.model = alexnet(pretrained=True).to(args.device)
-            # feature_dim = list(args.model.fc.parameters())[0].shape[1]
-            # args.model.fc = nn.Linear(feature_dim, args.num_classes).to(args.device)
-            
-        elif model_str == "GoogleNet":
-            args.model = torchvision.models.googlenet(pretrained=False, aux_logits=False, 
-                                                      num_classes=args.num_classes).to(args.device)
-            
-            # args.model = torchvision.models.googlenet(pretrained=True, aux_logits=False).to(args.device)
-            # feature_dim = list(args.model.fc.parameters())[0].shape[1]
-            # args.model.fc = nn.Linear(feature_dim, args.num_classes).to(args.device)
 
-        elif model_str == "MobileNet":
-            args.model = mobilenet_v2(pretrained=False, num_classes=args.num_classes).to(args.device)
-            
-            # args.model = mobilenet_v2(pretrained=True).to(args.device)
-            # feature_dim = list(args.model.fc.parameters())[0].shape[1]
-            # args.model.fc = nn.Linear(feature_dim, args.num_classes).to(args.device)
-            
+        elif model_str == "GoogleNet":
+            args.model = torchvision.models.googlenet(pretrained=False, aux_logits=False,
+                                                      num_classes=args.num_classes).to(args.device)
+
+        elif model_str == "MobileNet1":
+            args.model = models.mobilenet_v2(pretrained=False, num_classes=args.num_classes).to(args.device)
+
         elif model_str == "LSTM":
             args.model = LSTMNet(hidden_dim=args.feature_dim, vocab_size=args.vocab_size, num_classes=args.num_classes).to(args.device)
 
         elif model_str == "BiLSTM":
-            args.model = BiLSTM_TextClassification(input_size=args.vocab_size, hidden_size=args.feature_dim, 
-                                                   output_size=args.num_classes, num_layers=1, 
-                                                   embedding_dropout=0, lstm_dropout=0, attention_dropout=0, 
+            args.model = BiLSTM_TextClassification(input_size=args.vocab_size, hidden_size=args.feature_dim,
+                                                   output_size=args.num_classes, num_layers=1,
+                                                   embedding_dropout=0, lstm_dropout=0, attention_dropout=0,
                                                    embedding_length=args.feature_dim).to(args.device)
 
         elif model_str == "fastText":
             args.model = fastText(hidden_dim=args.feature_dim, vocab_size=args.vocab_size, num_classes=args.num_classes).to(args.device)
 
         elif model_str == "TextCNN":
-            args.model = TextCNN(hidden_dim=args.feature_dim, max_len=args.max_len, vocab_size=args.vocab_size, 
+            args.model = TextCNN(hidden_dim=args.feature_dim, max_len=args.max_len, vocab_size=args.vocab_size,
                                  num_classes=args.num_classes).to(args.device)
 
         elif model_str == "Transformer":
-            args.model = TransformerModel(ntoken=args.vocab_size, d_model=args.feature_dim, nhead=8, nlayers=2, 
+            args.model = TransformerModel(ntoken=args.vocab_size, d_model=args.feature_dim, nhead=8, nlayers=2,
                                           num_classes=args.num_classes, max_len=args.max_len).to(args.device)
-        
+
         elif model_str == "AmazonMLP":
             args.model = AmazonMLP().to(args.device)
 
         elif model_str == "HARCNN":
             if args.dataset == 'HAR':
-                args.model = HARCNN(9, dim_hidden=1664, num_classes=args.num_classes, conv_kernel_size=(1, 9), 
+                args.model = HARCNN(9, dim_hidden=1664, num_classes=args.num_classes, conv_kernel_size=(1, 9),
                                     pool_kernel_size=(1, 2)).to(args.device)
             elif args.dataset == 'PAMAP2':
-                args.model = HARCNN(9, dim_hidden=3712, num_classes=args.num_classes, conv_kernel_size=(1, 9), 
+                args.model = HARCNN(9, dim_hidden=3712, num_classes=args.num_classes, conv_kernel_size=(1, 9),
                                     pool_kernel_size=(1, 2)).to(args.device)
 
         else:
             raise NotImplementedError
 
-        # -------------------------- 新增：多卡模型封装 --------------------------
-        args.model = wrap_model_for_parallel(args.model, args)
+        args.model = args.model
         print(args.model)
 
         # select algorithm
         if args.algorithm == "FedAvg":
-            args.head = copy.deepcopy(args.model.fc)
+            args.head = copy.deepcopy(args.model.module.fc)
             args.model.fc = nn.Identity()
             args.model = BaseHeadSplit(args.model, args.head)
             server = FedAvg(args, i)
@@ -278,14 +439,15 @@ def run(args):
             server = FedMTL(args, i)
 
         elif args.algorithm == "PerAvg":
-            server = PerAvg(args, i)         
-            
+            server = PerAvg(args, i)
+
         elif args.algorithm == "pFedMe":
             server = pFedMe(args, i)
 
         elif args.algorithm == "FedProx":
             server = FedProx(args, i)
 
+        # ===== V2 优化版 FedProx =====
         elif args.algorithm == "FedProxV2":
             server = FedProxV2(args, i)
 
@@ -441,12 +603,11 @@ def run(args):
             server = FedLC(args, i)
 
         elif args.algorithm == 'FedAS':
-
             args.head = copy.deepcopy(args.model.fc)
             args.model.fc = nn.Identity()
             args.model = BaseHeadSplit(args.model, args.head)
             server = FedAS(args, i)
-            
+
         elif args.algorithm == "FedCross":
             server = FedCross(args, i)
 
@@ -455,10 +616,9 @@ def run(args):
 
         server.train()
 
-        time_list.append(time.time()-start)
+        time_list.append(time.time() - start)
 
     print(f"\nAverage time cost: {round(np.average(time_list), 2)}s.")
-    
 
     # Global average
     average_data(dataset=args.dataset, algorithm=args.algorithm, goal=args.goal, times=args.times)
@@ -473,25 +633,30 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     # general
-    parser.add_argument('-go', "--goal", type=str, default="test", 
+    parser.add_argument('-go', "--goal", type=str, default="test",
                         help="The goal for this experiment")
     parser.add_argument('-dev', "--device", type=str, default="cuda",
                         choices=["cpu", "cuda"])
     parser.add_argument('-did', "--device_id", type=str, default="0")
     parser.add_argument('-data', "--dataset", type=str, default="Cifar10")
     parser.add_argument('-ncl', "--num_classes", type=int, default=10)
-    parser.add_argument('-m', "--model", type=str, default="ResNet18")
-    parser.add_argument('-lbs', "--batch_size", type=int, default=64)    #10
+    parser.add_argument('-m', "--model", type=str, default="MobileNet")
+    parser.add_argument('-lbs', "--batch_size", type=int, default=64)
     parser.add_argument('-lr', "--local_learning_rate", type=float, default=0.01,
                         help="Local learning rate")
-    parser.add_argument('-ld', "--learning_rate_decay", type=bool, default=False)#False
-    parser.add_argument('-ldg', "--learning_rate_decay_gamma", type=float, default=0.98)
-    parser.add_argument('-gr', "--global_rounds", type=int, default=100)
-    parser.add_argument('-tc', "--top_cnt", type=int, default=100, 
+    parser.add_argument('-ld', "--learning_rate_decay", type=bool, default=True)
+    parser.add_argument('-ldg', "--learning_rate_decay_gamma", type=float, default=0.2)
+    parser.add_argument('-ldm', "--lr_decay_milestones", type=int, nargs='+', default=[20, 40],
+                        help="轮次节点，比如输入 80 120 表示在80、120轮衰减学习率")
+    parser.add_argument('-gr', "--global_rounds", type=int, default=70)
+    parser.add_argument('-tc', "--top_cnt", type=int, default=10,
                         help="For auto_break")
-    parser.add_argument('-ls', "--local_epochs", type=int, default=5, #1
+    parser.add_argument('-ls', "--local_epochs", type=int, default=1,
                         help="Multiple update steps in one local epoch.")
-    parser.add_argument('-algo', "--algorithm", type=str, default="FedProx")#model
+    parser.add_argument('-algo', "--algorithm", type=str, default="FedProxV2")
+
+    parser.add_argument('--weight-decay', '--wd', dest='weight_decay', default=1e-4, type=float,
+                        help='weight decay')
     parser.add_argument('-jr', "--join_ratio", type=float, default=1,
                         help="Ratio of clients per round")
     parser.add_argument('-rjr', "--random_join_ratio", type=bool, default=False,
@@ -502,17 +667,17 @@ if __name__ == "__main__":
                         help="Previous Running times")
     parser.add_argument('-t', "--times", type=int, default=1,
                         help="Running times")
-    parser.add_argument('-eg', "--eval_gap", type=int, default=3,   
-                        help="Rounds gap for evaluation")     #1
+    parser.add_argument('-eg', "--eval_gap", type=int, default=1,
+                        help="Rounds gap for evaluation")
     parser.add_argument('-sfn', "--save_folder_name", type=str, default='items')
-    parser.add_argument('-ab', "--auto_break", type=bool, default=False)
+    parser.add_argument('-ab', "--auto_break", type=bool, default=True)
     parser.add_argument('-dlg', "--dlg_eval", type=bool, default=False)
     parser.add_argument('-dlgg', "--dlg_gap", type=int, default=100)
-    parser.add_argument('-bnpc', "--batch_num_per_client", type=int, default=2)#2
+    parser.add_argument('-bnpc', "--batch_num_per_client", type=int, default=10)
     parser.add_argument('-nnc', "--num_new_clients", type=int, default=0)
     parser.add_argument('-ften', "--fine_tuning_epoch_new", type=int, default=0)
     parser.add_argument('-fd', "--feature_dim", type=int, default=512)
-    parser.add_argument('-vs', "--vocab_size", type=int, default=80, 
+    parser.add_argument('-vs', "--vocab_size", type=int, default=80,
                         help="Set this for text tasks. 80 for Shakespeare. 32000 for AG_News and SogouNews.")
     parser.add_argument('-ml', "--max_len", type=int, default=200)
     parser.add_argument('-fs', "--few_shot", type=int, default=0)
@@ -531,7 +696,7 @@ if __name__ == "__main__":
     parser.add_argument('-bt', "--beta", type=float, default=0.0)
     parser.add_argument('-lam', "--lamda", type=float, default=1.0,
                         help="Regularization weight")
-    parser.add_argument('-mu', "--mu", type=float, default=0.05)#0.0
+    parser.add_argument('-mu', "--mu", type=float, default=0.01)
     parser.add_argument('-K', "--K", type=int, default=5,
                         help="Number of personalized training steps for pFedMe")
     parser.add_argument('-lrp', "--p_learning_rate", type=float, default=0.01,
@@ -543,7 +708,7 @@ if __name__ == "__main__":
     parser.add_argument('-itk', "--itk", type=int, default=4000,
                         help="The iterations for solving quadratic subproblems")
     # FedAMP
-    parser.add_argument('-alk', "--alphaK", type=float, default=1.0, 
+    parser.add_argument('-alk', "--alphaK", type=float, default=1.0,
                         help="lambda/sqrt(GLOABL-ITRATION) according to the paper")
     parser.add_argument('-sg', "--sigma", type=float, default=1.0)
     # APFL / FedCross
@@ -575,7 +740,7 @@ if __name__ == "__main__":
     parser.add_argument('-Ts', "--T_start", type=float, default=0.95)
     parser.add_argument('-Te', "--T_end", type=float, default=0.98)
     # FedDBE
-    parser.add_argument('-mo', "--momentum", type=float, default=0.1)
+    parser.add_argument('-mo', "--momentum", type=float, default=0.9)
     parser.add_argument('-klw', "--kl_weight", type=float, default=0.0)
 
     # FedCross
@@ -583,34 +748,41 @@ if __name__ == "__main__":
     parser.add_argument('-ca', "--fedcross_alpha", type=float, default=0.99)
     parser.add_argument('-cmss', "--collaberative_model_select_strategy", type=int, default=1)
 
+    # ===== V2 新增参数 =====
+    parser.add_argument('-wr', "--warmup_rounds", type=int, default=5,
+                        help="Warmup rounds for V2 (linear warmup)")
+    parser.add_argument('-pp', "--pretrained_path", type=str, default="",
+                        help="离线预训练权重路径，如 resnet18_imagenet.pt（手机下载后传到服务器）")
 
     args = parser.parse_args()
 
     if args.device == "cuda" and args.device_id:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id
-    # 初始化设备（多卡适配）
     setup_device(args)
     if args.device == "cuda" and not torch.cuda.is_available():
         print("\ncuda is not avaiable.\n")
         args.device = torch.device("cpu")
         args.multi_gpu = False
 
+    import torch
+    import os
+
+    total_clients = args.num_clients
+
+    if args.device == "cuda" and "," in args.device_id:
+        num_gpus = len(args.device_id.split(','))
+        available_gpus = [torch.device(f"cuda:{i}") for i in range(num_gpus)]
+    else:
+        available_gpus = [torch.device(args.device)]
+
+    args.client_device_map = {}
+    for client_id in range(total_clients):
+        gpu_idx = client_id % len(available_gpus)
+        args.client_device_map[client_id] = available_gpus[gpu_idx]
 
     print("=" * 50)
     for arg in vars(args):
-        print(arg, '=',getattr(args, arg))
+        print(arg, '=', getattr(args, arg))
     print("=" * 50)
 
-    # with torch.profiler.profile(
-    #     activities=[
-    #         torch.profiler.ProfilerActivity.CPU,
-    #         torch.profiler.ProfilerActivity.CUDA],
-    #     profile_memory=True, 
-    #     on_trace_ready=torch.profiler.tensorboard_trace_handler('./log')
-    #     ) as prof:
-    # with torch.autograd.profiler.profile(profile_memory=True) as prof:
     run(args)
-
-    
-    # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=20))
-    # print(f"\nTotal time cost: {round(time.time()-total_start, 2)}s.")
