@@ -70,6 +70,7 @@ from flcore.servers.servercross import FedCross
 
 # V2 优化版 FedProx
 from flcore.servers.serverprox_v2 import FedProxV2
+from flcore.trainmodel.attention import SEBlock, ECABlock, CBAM, SimAM
 
 from flcore.trainmodel.models import *
 from flcore.trainmodel.bilstm import *
@@ -263,6 +264,95 @@ def auto_load_pretrained(model, model_name, args, skip_keys=('fc', 'classifier')
         return False
 
 
+# ════════════════════════════════════════════════════════════════
+# SE / 注意力机制注入辅助函数
+# ════════════════════════════════════════════════════════════════
+
+def _inject_se_resnet18(model):
+    """在 ResNet18 每个 BasicBlock 的 conv2 后注入 SE Block
+
+    BasicBlock forward: x → conv1 → bn1 → relu → conv2 → bn2 → SE → +x → relu
+    SE 加在 shortcut 之前，让每个 block 学会强调/抑制通道。
+    """
+    for name, child in model.named_children():
+        if name in ('layer1', 'layer2', 'layer3', 'layer4'):
+            _inject_se_resnet18(child)
+        elif hasattr(child, 'conv2') and hasattr(child, 'bn2'):
+            # 这是一个 BasicBlock，注入 SE
+            ch = child.conv2.in_channels
+            se = SEBlock(ch, reduction=16).to(next(child.parameters()).device)
+            orig_conv2 = child.conv2
+            orig_bn2 = child.bn2
+            orig_downsample = child.downsample
+            orig_relu = child.relu
+
+            def make_se_forward(se, c2, b2, ds, rel, block=child):
+                def forward(x):
+                    identity = x
+                    out = block.conv1(x)
+                    out = block.bn1(out)
+                    out = block.relu(out)
+                    out = c2(out)
+                    out = b2(out)
+                    out = se(out)          # ← SE 注入位置
+                    if ds is not None:
+                        identity = ds(x)
+                    out += identity
+                    out = rel(out)
+                    return out
+                return forward
+
+            child.forward = make_se_forward(se, orig_conv2, orig_bn2,
+                                           orig_downsample, orig_relu)
+
+
+def _inject_se_mobilenetv2(model):
+    """在 MobileNetV2 每个 InvertedResidual 的 depthwise conv 后注入 SE Block
+
+    InvertedResidual forward:
+        x → conv[0] (expand) → BN → ReLU → conv[1] (dw) → BN → conv[2] (project) → +x
+
+    SE 插在 conv[1] (depthwise) 之后，在 BN 之后（通道数最大，效果最好）。
+    """
+    for name, child in model.named_children():
+        if name == 'features':
+            for layer in child:
+                if not hasattr(layer, 'conv') or not hasattr(layer, 'use_res_connect'):
+                    continue
+                if getattr(layer, '_se_injected', False):
+                    continue
+
+                conv = layer.conv  # nn.Sequential: [expand_conv, dw_conv, project_conv]
+                conv_list = list(conv.children())
+                if len(conv_list) < 2:
+                    continue
+
+                # 找 depthwise conv: groups > 1 的 Conv2d
+                dw_idx = -1
+                for i, m in enumerate(conv_list):
+                    if isinstance(m, nn.Conv2d) and m.groups > 1:
+                        dw_idx = i
+                        break
+
+                if dw_idx < 0:
+                    continue
+
+                # depthwise conv 输出通道 = SE 输入通道
+                dw_out_ch = conv_list[dw_idx].out_channels
+                se = SEBlock(dw_out_ch, reduction=8).to(
+                    next(layer.parameters()).device)
+
+                # 在 dw conv 之后、project conv 之前插入 SE
+                new_conv_list = conv_list[:dw_idx + 1]  # up to dw conv (included)
+                new_conv_list.append(se)               # SE
+                new_conv_list.extend(conv_list[dw_idx + 1:])  # rest
+
+                layer.conv = nn.Sequential(*new_conv_list)
+                layer._se_injected = True
+        else:
+            _inject_se_mobilenetv2(child)
+
+
 logger = logging.getLogger()
 logger.setLevel(logging.ERROR)
 
@@ -326,6 +416,13 @@ def run(args):
                         replace_bn(child)
 
             replace_bn(args.model)
+
+            # ══ SE 注意力注入（在 BN→GN 替换之后）═════════════════════
+            att_type = getattr(args, 'attention', 'none')
+            if att_type not in ('none', ''):
+                _inject_se_resnet18(args.model)
+                print(f">>> [注意力] ResNet18 已注入 SE Block (type={att_type})")
+            # ════════════════════════════════════════════════════════
 
             # 初始化（只对 GN 和 fc 层做初始化，卷积层保留预训练值）
             for m in args.model.modules():
@@ -396,6 +493,13 @@ def run(args):
                         replace_bn(child)
 
             replace_bn(args.model)
+
+            # ══ SE 注意力注入（在 BN→GN 替换之后）═════════════════════
+            att_type = getattr(args, 'attention', 'none')
+            if att_type not in ('none', ''):
+                _inject_se_mobilenetv2(args.model)
+                print(f">>> [注意力] MobileNetV2 已注入 SE Block (type={att_type})")
+            # ════════════════════════════════════════════════════════
 
             # 初始化（只对 GN 和 fc 层做初始化，卷积层保留预训练值）
             for m in args.model.modules():
@@ -719,16 +823,16 @@ def main():
     parser.add_argument('-ncl', "--num_classes", type=int, default=10)
     parser.add_argument('-m', "--model", type=str, default="MobileNet")
     parser.add_argument('-lbs', "--batch_size", type=int, default=64)
-    parser.add_argument('-lr', "--local_learning_rate", type=float, default=0.01,
+    parser.add_argument('-lr', "--local_learning_rate", type=float, default=0.05,
                         help="Local learning rate")
     parser.add_argument('-ld', "--learning_rate_decay", type=bool, default=True)
     parser.add_argument('-ldg', "--learning_rate_decay_gamma", type=float, default=0.2)
-    parser.add_argument('-ldm', "--lr_decay_milestones", type=int, nargs='+', default=[20, 40],
-                        help="轮次节点，比如输入 80 120 表示在80、120轮衰减学习率")
+    parser.add_argument('-ldm', "--lr_decay_milestones", type=int, nargs='+', default=[40, 60],
+                        help="轮次节点，比如输入 40 60 表示在40、60轮衰减学习率")
     parser.add_argument('-gr', "--global_rounds", type=int, default=70)
     parser.add_argument('-tc', "--top_cnt", type=int, default=10,
                         help="For auto_break")
-    parser.add_argument('-ls', "--local_epochs", type=int, default=1,
+    parser.add_argument('-ls', "--local_epochs", type=int, default=3,
                         help="Multiple update steps in one local epoch.")
     parser.add_argument('-algo', "--algorithm", type=str, default="FedProxV2")
 
@@ -773,7 +877,7 @@ def main():
     parser.add_argument('-bt', "--beta", type=float, default=0.0)
     parser.add_argument('-lam', "--lamda", type=float, default=1.0,
                         help="Regularization weight")
-    parser.add_argument('-mu', "--mu", type=float, default=0.01)
+    parser.add_argument('-mu', "--mu", type=float, default=0.1)
     parser.add_argument('-K', "--K", type=int, default=5,
                         help="Number of personalized training steps for pFedMe")
     parser.add_argument('-lrp', "--p_learning_rate", type=float, default=0.01,
@@ -826,12 +930,19 @@ def main():
     parser.add_argument('-cmss', "--collaberative_model_select_strategy", type=int, default=1)
 
     # ===== V2 新增参数 =====
-    parser.add_argument('-wr', "--warmup_rounds", type=int, default=5,
-                        help="Warmup rounds for V2 (linear warmup)")
+    parser.add_argument('-wr', "--warmup_rounds", type=int, default=0,
+                        help="Warmup rounds for V2 (0=关闭)")
     parser.add_argument('-pp', "--pretrained_path", type=str, default="",
                         help="离线预训练权重路径")
     parser.add_argument('-mn', "--model_name", type=str, default="",
                         help="模型名称，用于保存文件命名")
+    parser.add_argument('-ma', "--mixup_alpha", type=float, default=0,
+                        help="Mixup 数据增强 alpha 值，0=关闭，推荐0.2")
+    parser.add_argument('-aw', "--aux_weight", type=float, default=0,
+                        help="深度监督辅助损失权重，0=关闭，推荐0.3")
+    parser.add_argument('-at', "--attention", type=str, default='none',
+                        choices=['none', 'se', 'eca', 'cbam', 'simam'],
+                        help="注意力机制类型：se/eca/cbam/simam/none，se 推荐")
 
     args = parser.parse_args()
 
