@@ -273,37 +273,44 @@ def _inject_se_resnet18(model):
 
     BasicBlock forward: x → conv1 → bn1 → relu → conv2 → bn2 → SE → +x → relu
     SE 加在 shortcut 之前，让每个 block 学会强调/抑制通道。
+
+    通过 setattr 将 SE 注册为 BasicBlock 的子模块，
+    这样 model.to(device) 时 SE 会自动跟着移动。
     """
+    block_idx = 0
     for name, child in model.named_children():
         if name in ('layer1', 'layer2', 'layer3', 'layer4'):
             _inject_se_resnet18(child)
         elif hasattr(child, 'conv2') and hasattr(child, 'bn2'):
             # 这是一个 BasicBlock，注入 SE
             ch = child.conv2.in_channels
-            se = SEBlock(ch, reduction=16).to(next(child.parameters()).device)
-            orig_conv2 = child.conv2
-            orig_bn2 = child.bn2
-            orig_downsample = child.downsample
-            orig_relu = child.relu
+            se = SEBlock(ch, reduction=16)
 
-            def make_se_forward(se, c2, b2, ds, rel, block=child):
+            # ★ 关键：用 setattr 注册为子模块，.to(device) 时会自动移动
+            setattr(child, f'se_block', se)
+
+            block_idx += 1
+
+            # 保存原始 forward 引用（备用）
+            orig_downsample = child.downsample
+
+            def make_se_forward(block=child, ds=orig_downsample):
                 def forward(x):
                     identity = x
                     out = block.conv1(x)
                     out = block.bn1(out)
                     out = block.relu(out)
-                    out = c2(out)
-                    out = b2(out)
-                    out = se(out)          # ← SE 注入位置
+                    out = block.conv2(out)
+                    out = block.bn2(out)
+                    out = block.se_block(out)   # ← SE 注入位置
                     if ds is not None:
                         identity = ds(x)
                     out += identity
-                    out = rel(out)
+                    out = block.relu(out)
                     return out
                 return forward
 
-            child.forward = make_se_forward(se, orig_conv2, orig_bn2,
-                                           orig_downsample, orig_relu)
+            child.forward = make_se_forward()
 
 
 def _inject_se_mobilenetv2(model):
@@ -339,8 +346,7 @@ def _inject_se_mobilenetv2(model):
 
                 # depthwise conv 输出通道 = SE 输入通道
                 dw_out_ch = conv_list[dw_idx].out_channels
-                se = SEBlock(dw_out_ch, reduction=8).to(
-                    next(layer.parameters()).device)
+                se = SEBlock(dw_out_ch, reduction=8)
 
                 # 在 dw conv 之后、project conv 之前插入 SE
                 new_conv_list = conv_list[:dw_idx + 1]  # up to dw conv (included)
