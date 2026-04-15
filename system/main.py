@@ -617,7 +617,7 @@ if __name__ == "__main__":
     parser.add_argument('-ld', "--learning_rate_decay", type=bool, default=True)#False
     parser.add_argument('-ldg', "--learning_rate_decay_gamma", type=float, default=0.1)
     parser.add_argument('-ldm', "--lr_decay_milestones", type=int, nargs='+', default=[20,40],
-                    help="轮次节点，比如输入 80 120 表示在80、120轮衰减学习率")
+                    help="轮次节点，比如输入 80 120 表示在 80、120 轮衰减学习率")
     parser.add_argument('-gr', "--global_rounds", type=int, default=100)#2000
     parser.add_argument('-tc', "--top_cnt", type=int, default=10, 
                         help="For auto_break")

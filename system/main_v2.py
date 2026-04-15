@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 """
 main_v2.py - 优化版入口
 基于实际服务器 main.py，仅新增，不修改原文件
@@ -10,6 +11,11 @@ main_v2.py - 优化版入口
 4. 优化默认参数（更适合CIFAR10训练）
 5. 新增 warmup_rounds 参数
 """
+
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 import copy
 import torch

@@ -349,6 +349,7 @@ class Server(object):
             self.rs_train_loss.append(train_loss)
         else:
             loss.append(train_loss)
+        print("Current Learning Rate: {:.6f}".format(self.learning_rate)) 
         print("Averaged Train Loss: {:.4f}".format(train_loss))
         print("Averaged Test Accuracy: {:.4f}".format(test_acc))
         print("Averaged Test AUC: {:.4f}".format(test_auc))

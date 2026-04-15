@@ -58,3 +58,4 @@ results/
 models/
 items/
 rawdata/
+system/mobilenet_v2_imagenet.pth
