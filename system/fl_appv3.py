@@ -22,18 +22,24 @@ from PyQt5.QtWidgets import (
     QComboBox, QLineEdit, QFormLayout, QTabWidget, QScrollArea,
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
     QMessageBox, QFileDialog, QFrame, QSizePolicy,
-    QAbstractItemView
+    QAbstractItemView, QInputDialog
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer
 from PyQt5.QtGui import QFont, QPixmap
 
+import torch
+from torchvision import transforms
+import numpy as np
+from PIL import Image
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 
-
+# ============================================================
+# 全局样式常量 — 统一字体大小
+# ============================================================
 FONT_SIZE_LABEL = 12       # 标签字体
 FONT_SIZE_INPUT = 12       # 输入框字体
 FONT_SIZE_TITLE = 28       # 标题字体
@@ -176,7 +182,7 @@ class ResultWindow(QMainWindow):
         main_layout.setContentsMargins(15, 15, 15, 15)
 
         # 标题
-        title = QLabel("训练结果分析")
+        title = QLabel("📊 训练结果分析")
         title.setFont(QFont("Microsoft YaHei", FONT_SIZE_TITLE - 2, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("color: #2c3e50;")
@@ -343,6 +349,13 @@ class ClassifyWindow(QMainWindow):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # 分类功能相关属性
+        self.loaded_model = None
+        self.loaded_dataset = None
+        self.loaded_model_str = None
+        self.class_names = None
+        self.image_path = None
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.init_ui()
 
     def init_ui(self):
@@ -360,21 +373,42 @@ class ClassifyWindow(QMainWindow):
         title.setStyleSheet("color: #2c3e50; margin: 15px 0;")
         layout.addWidget(title)
 
-        # 上传区域
-        upload_frame = QFrame()
-        upload_frame.setStyleSheet("""
-            QFrame {
+        # 上传区域（可点击按钮）
+        upload_btn = QPushButton("📷 点击或拖拽上传农作物图片")
+        upload_btn.setObjectName("upload_btn")
+        upload_btn.setStyleSheet("""
+            QPushButton#upload_btn {
                 background-color: #ecf0f1; border: 2px dashed #bdc3c7;
-                border-radius: 12px;
+                border-radius: 12px; color: #7f8c8d;
+                font-size: %dpx; font-weight: bold; padding: 60px;
+                min-height: 100px;
             }
-        """)
-        upload_layout = QVBoxLayout(upload_frame)
-        upload_label = QLabel("点击或拖拽上传农作物图片")
-        upload_label.setAlignment(Qt.AlignCenter)
-        upload_label.setFont(QFont("", FONT_SIZE_LABEL + 2, QFont.Bold))
-        upload_label.setStyleSheet("color: #7f8c8d; padding: 60px;")
-        upload_layout.addWidget(upload_label)
-        layout.addWidget(upload_frame)
+            QPushButton#upload_btn:hover {
+                background-color: #d5dbdb; border-color: #95a5a6;
+            }
+            QPushButton#upload_btn:pressed {
+                background-color: #bfc9ca;
+            }
+        """ % (FONT_SIZE_LABEL + 2))
+        upload_btn.clicked.connect(self.on_select_image)
+        layout.addWidget(upload_btn)
+        
+        # 状态行
+        status_frame = QFrame()
+        status_layout = QHBoxLayout(status_frame)
+        status_layout.setContentsMargins(5, 5, 5, 5)
+        
+        self.model_status = QLabel("模型: 未加载")
+        self.model_status.setStyleSheet("color: #e74c3c; font-weight: bold;")
+        status_layout.addWidget(self.model_status)
+        
+        status_layout.addStretch()
+        
+        self.image_status = QLabel("图片: 未选择")
+        self.image_status.setStyleSheet("color: #e74c3c; font-weight: bold;")
+        status_layout.addWidget(self.image_status)
+        
+        layout.addWidget(status_frame)
 
         # 结果区域
         result_group = QGroupBox("分类结果")
@@ -400,27 +434,193 @@ class ClassifyWindow(QMainWindow):
 
         # 按钮
         btn_row = QHBoxLayout()
-        classify_btn = QPushButton("开始分类")
+        classify_btn = QPushButton("🔍 开始分类")
         classify_btn.setObjectName("result_btn")
         classify_btn.clicked.connect(self.on_classify)
         btn_row.addWidget(classify_btn)
 
-        load_model_btn = QPushButton("加载模型")
+        load_model_btn = QPushButton("📂 加载模型")
         load_model_btn.setObjectName("result_btn")
         load_model_btn.clicked.connect(self.on_load_model)
         btn_row.addWidget(load_model_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
+    def on_select_image(self):
+        """选择图片文件"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择图片文件", "", "Image files (*.jpg *.jpeg *.png *.bmp);;All Files (*)")
+        if path:
+            self.image_path = path
+            # 显示预览
+            pixmap = QPixmap(path)
+            if pixmap.isNull():
+                QMessageBox.warning(self, "警告", "无法加载图片文件")
+                return
+            # 缩放以适应标签
+            pixmap = pixmap.scaled(self.result_img_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.result_img_label.setPixmap(pixmap)
+            # 更新状态标签
+            if hasattr(self, 'image_status'):
+                self.image_status.setText(f"图片: {os.path.basename(path)}")
+                self.image_status.setStyleSheet("color: #27ae60; font-weight: bold;")
+            # 更新结果文本
+            self.result_text.setPlainText(f"已加载图片:\n{path}\n\n请加载模型后点击'开始分类'")
+
     def on_classify(self):
-        QMessageBox.information(self, "提示",
-                                "分类功能正在开发中...\n请先完成训练获取模型权重。")
+        """执行分类预测"""
+        if self.loaded_model is None:
+            QMessageBox.warning(self, "警告", "请先加载模型")
+            return
+        if self.image_path is None:
+            QMessageBox.warning(self, "警告", "请先选择图片")
+            return
+        
+        try:
+            # 获取数据集类别数
+            num_classes = self._get_num_classes(self.loaded_dataset)
+            
+            # 图片预处理（根据数据集调整）
+            image = Image.open(self.image_path)
+            
+            # 确定预处理参数
+            if self.loaded_dataset == 'MNIST':
+                # MNIST是灰度图
+                image = image.convert('L')
+                target_size = (28, 28)
+                normalize_mean = (0.5,)
+                normalize_std = (0.5,)
+                in_channels = 1
+            else:
+                # 其他数据集默认为RGB
+                image = image.convert('RGB')
+                target_size = (32, 32)  # Cifar10等
+                normalize_mean = (0.5, 0.5, 0.5)
+                normalize_std = (0.5, 0.5, 0.5)
+                in_channels = 3
+            
+            transform = transforms.Compose([
+                transforms.Resize(target_size),
+                transforms.ToTensor(),
+                transforms.Normalize(normalize_mean, normalize_std)
+            ])
+            input_tensor = transform(image).unsqueeze(0).to(self.device)
+            
+            # 预测
+            with torch.no_grad():
+                outputs = self.loaded_model(input_tensor)
+                probabilities = torch.nn.functional.softmax(outputs, dim=1)
+                predicted_class = torch.argmax(probabilities, dim=1).item()
+                confidence = probabilities[0][predicted_class].item()
+            
+            # 显示结果
+            class_name = self.class_names[predicted_class] if self.class_names else str(predicted_class)
+            result = f"""分类结果:
+图片: {os.path.basename(self.image_path)}
+预测类别: {class_name} (索引: {predicted_class})
+置信度: {confidence:.2%}
+模型: {self.loaded_model_str}
+数据集: {self.loaded_dataset}
+"""
+            self.result_text.setPlainText(result)
+            
+            # 可选：在状态栏显示分类结果
+            if hasattr(self, 'model_status'):
+                self.model_status.setText(f"模型: {self.loaded_model_str} ({self.loaded_dataset}) ✓")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "分类失败", f"错误: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def _get_num_classes(self, dataset):
+        """根据数据集名称获取类别数"""
+        if dataset == 'Cifar10':
+            return 10
+        elif dataset == 'MNIST':
+            return 10
+        elif dataset == 'Omniglot':
+            return 1623
+        elif dataset == 'Digit5':
+            return 10
+        elif dataset == 'HAR':
+            return 6
+        elif dataset == 'PAMAP2':
+            return 12
+        elif dataset == 'Shakespeare':
+            return 80
+        else:
+            return 10  # 默认
 
     def on_load_model(self):
+        """加载模型文件并解析信息"""
         path, _ = QFileDialog.getOpenFileName(
             self, "选择模型文件", "", "PyTorch (*.pt *.pth);;All Files (*)")
         if path:
-            self.result_text.setText(f"已加载模型:\n{path}")
+            try:
+                # 导入model_predict中的函数
+                import sys
+                import os
+                sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+                from model_predict import parse_model_info_from_path, load_pytorch_model, create_model
+                
+                # 解析模型信息
+                dataset, model_str, acc = parse_model_info_from_path(path)
+                if dataset is None:
+                    QMessageBox.warning(self, "警告", "无法从文件名推断数据集，请手动输入数据集名称。")
+                    dataset, ok = QInputDialog.getText(self, "输入数据集", "请输入数据集名称 (如 Cifar10, MNIST):")
+                    if not ok or not dataset:
+                        return
+                if model_str is None:
+                    QMessageBox.warning(self, "警告", "无法从文件名推断模型类型，请手动输入模型类型。")
+                    model_str, ok = QInputDialog.getText(self, "输入模型类型", "请输入模型类型 (如 MobileNet, ResNet18, CNN):")
+                    if not ok or not model_str:
+                        return
+                
+                # 获取类别数
+                num_classes = self._get_num_classes(dataset)
+                
+                # 加载模型
+                model = load_pytorch_model(path, model_str, dataset, num_classes, self.device)
+                
+                # 保存到属性
+                self.loaded_model = model
+                self.loaded_model_path = path
+                self.loaded_model_str = model_str
+                self.loaded_dataset = dataset
+                
+                # 设置类别名称（根据数据集）
+                self.class_names = self._get_class_names(dataset)
+                
+                # 更新状态标签
+                if hasattr(self, 'model_status'):
+                    self.model_status.setText(f"模型: {model_str} ({dataset})")
+                    self.model_status.setStyleSheet("color: #27ae60; font-weight: bold;")
+                
+                # 显示成功信息
+                acc_text = f"，准确率: {acc:.4f}" if acc else ""
+                self.result_text.setPlainText(f"""模型加载成功!
+文件: {os.path.basename(path)}
+数据集: {dataset}
+模型类型: {model_str}{acc_text}
+类别数: {num_classes}
+设备: {self.device}
+
+请选择图片后点击'开始分类'""")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "加载失败", f"错误: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+    def _get_class_names(self, dataset):
+        """根据数据集返回类别名称列表"""
+        if dataset == 'Cifar10':
+            return ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+        elif dataset == 'MNIST':
+            return ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+        else:
+            return None  # 未知数据集
 
 
 # ============================================================
@@ -499,7 +699,7 @@ class FedProxApp(QMainWindow):
 
         self.clients_combo = QComboBox()
         self.clients_combo.setEditable(True)
-        self.clients_combo.addItems(["1", "2", "5", "10", "20"])
+        self.clients_combo.addItems(["1", "2", "5", "10"])
         self.clients_combo.setCurrentIndex(1)
         right_form.addRow("客户端数:", self.clients_combo)
 
@@ -814,13 +1014,13 @@ class FedProxApp(QMainWindow):
             self.status_label.setText("状态: 训练失败")
             self.status_label.setStyleSheet("color: #e74c3c; font-weight:bold;")
             self.append_log("=" * 40)
-            self.append_log("训练异常终止！请查看上方日志排查错误。")
+            self.append_log("⚠ 训练异常终止！请查看上方日志排查错误。")
             self.append_log("=" * 40)
         else:
             self.status_label.setText("状态: 完成")
             self.status_label.setStyleSheet("color: #27ae60; font-weight:bold;")
             self.append_log("=" * 40)
-            self.append_log("训练成功完成！正在打开结果分析窗口...")
+            self.append_log("✅ 训练成功完成！正在打开结果分析窗口...")
             self.append_log("=" * 40)
             self.progress_bar.setValue(100)
 
