@@ -69,7 +69,7 @@ class Server(object):
         import torch
         import os
 
-        model_path = os.path.join("models", self.dataset, f"{self.algorithm}_server.pt")
+        model_path = os.path.join("models", self.dataset, f"{self.algorithm}_{self.dataset}.pt")
 
         if os.path.exists(model_path):
             print("\n" + "="*40)
@@ -207,18 +207,18 @@ class Server(object):
         model_path = os.path.join("models", self.dataset)
         if not os.path.exists(model_path):
             os.makedirs(model_path)
-        model_path = os.path.join(model_path, self.algorithm + "_server" + ".pt")
+        model_path = os.path.join(model_path, self.algorithm + "_" + self.dataset + ".pt")
         torch.save(self.global_model, model_path)
 
     def load_model(self):
         model_path = os.path.join("models", self.dataset)
-        model_path = os.path.join(model_path, self.algorithm + "_server" + ".pt")
+        model_path = os.path.join(model_path, self.algorithm + "_" + self.dataset + ".pt")
         assert (os.path.exists(model_path))
         self.global_model = torch.load(model_path)
 
     def model_exists(self):
         model_path = os.path.join("models", self.dataset)
-        model_path = os.path.join(model_path, self.algorithm + "_server" + ".pt")
+        model_path = os.path.join(model_path, self.algorithm + "_" + self.dataset + ".pt")
         return os.path.exists(model_path)
         
     def save_results1(self):
@@ -251,8 +251,8 @@ class Server(object):
         # 如果 args 里没有 model_name，则尝试从模型对象中获取类名
         m_name = getattr(self.args, 'model_name', self.global_model.__class__.__name__)
         
-        # 4. 组合文件名：模型名_算法名_server_准确率.pt
-        file_name = f"{m_name}_{self.algorithm}_server{acc_str}.pt"
+        # 4. 组合文件名：模型名_算法名_数据集_准确率.pt
+        file_name = f"{m_name}_{self.algorithm}_{self.dataset}{acc_str}.pt"
         model_full_path = os.path.join(model_path, file_name)
         
         # 5. 保存

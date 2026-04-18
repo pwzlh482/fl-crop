@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-main_v2.py - 优化版入口
-基于实际服务器 main.py，仅新增，不修改原文件
 
 优化点：
 1. 使用 FedProxV2（label_smoothing + momentum + CosineAnnealing + 梯度裁剪 + 动态mu衰减 + Warmup）
@@ -32,7 +30,6 @@ import copy
 import logging
 import torchvision.models as models
 
-# 原版算法导入（保持兼容）
 from flcore.servers.serveravg import FedAvg
 from flcore.servers.serverpFedMe import pFedMe
 from flcore.servers.serverperavg import PerAvg
@@ -74,7 +71,7 @@ from flcore.servers.serverlc import FedLC
 from flcore.servers.serveras import FedAS
 from flcore.servers.servercross import FedCross
 
-# V2 优化版 FedProx
+# 优化版 FedProxV2
 from flcore.servers.serverprox_v2 import FedProxV2
 from flcore.trainmodel.attention import SEBlock, ECABlock, CBAM, SimAM
 
@@ -170,9 +167,8 @@ def load_pretrained_resnet18(model, pretrained_path, num_classes):
 
 
 def load_pretrained_weights(model, pretrained_path, skip_keys=('fc', 'classifier')):
-    """离线加载预训练权重（通用版，支持 ResNet18 / MobileNetV2 等）
+    """离线加载预训练权重
 
-    自动处理：
     - DataParallel 的 module. 前缀
     - fc / classifier 层类别数不匹配时跳过
     - 形状不匹配的层跳过（如 BN→GN 后参数形状变了）
@@ -271,7 +267,7 @@ def auto_load_pretrained(model, model_name, args, skip_keys=('fc', 'classifier')
 
 
 # ════════════════════════════════════════════════════════════════
-# SE / 注意力机制注入辅助函数
+# SE / 注意力机制注入
 # ════════════════════════════════════════════════════════════════
 
 def _inject_se_resnet18(model):
@@ -948,13 +944,13 @@ def main():
                         help="离线预训练权重路径")
     parser.add_argument('-mn', "--model_name", type=str, default="",
                         help="模型名称，用于保存文件命名")
-    parser.add_argument('-ma', "--mixup_alpha", type=float, default=0,
+    parser.add_argument('-ma', "--mixup_alpha", type=float, default=0.2,
                         help="Mixup 数据增强 alpha 值，0=关闭，推荐0.2")
     parser.add_argument('-aw', "--aux_weight", type=float, default=0,
                         help="深度监督辅助损失权重，0=关闭，推荐0.3")
-    parser.add_argument('-at', "--attention", type=str, default='none',
+    parser.add_argument('-at', "--attention", type=str, default='se',
                         choices=['none', 'se', 'eca', 'cbam', 'simam'],
-                        help="注意力机制类型：se/eca/cbam/simam/none，se 推荐")
+                        help="注意力机制类型：se/eca/cbam/simam/none")
 
     args = parser.parse_args()
 
