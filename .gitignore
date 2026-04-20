@@ -59,3 +59,9 @@ models/
 items/
 rawdata/
 system/mobilenet_v2_imagenet.pth
+
+# 可执行文件
+cpolar
+# 额外数据集目录
+dataset/Cifar100/
+dataset/Cifar10_100/

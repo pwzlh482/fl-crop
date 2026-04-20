@@ -827,7 +827,7 @@ def main():
     parser.add_argument('-dev', "--device", type=str, default="cuda",
                         choices=["cpu", "cuda"])
     parser.add_argument('-did', "--device_id", type=str, default="0")
-    parser.add_argument('-data', "--dataset", type=str, default="Cifar10")
+    parser.add_argument('-data', "--dataset", type=str, default="Cifar10_100")
     parser.add_argument('-ncl', "--num_classes", type=int, default=10)
     parser.add_argument('-m', "--model", type=str, default="MobileNet")
     parser.add_argument('-lbs', "--batch_size", type=int, default=64)

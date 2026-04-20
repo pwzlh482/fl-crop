@@ -9,7 +9,7 @@ from PIL import Image
 
 batch_size = 10
 train_ratio = 0.75 # merge original training set and test set, then split it manually. 
-alpha = 0.1 # for Dirichlet distribution. 100 for exdir
+alpha = 100 # for Dirichlet distribution. 100 for exdir
 
 def check(config_path, train_path, test_path, num_clients, niid=False, 
         balance=True, partition=None):
@@ -173,11 +173,27 @@ def separate_data(data, num_clients, num_classes, niid=False, balance=False, par
                 There are some cases that the samples of class k are not allocated completely, i.e., proportions[-1] < len(idx_k)
                 In these cases, the remainder data samples are assigned to the last client in `clientidx_map[k]`.
                 '''
+                # 修复：删除原有的余数倾倒逻辑，改用循环分配保证公平
+                # 1. 计算分割点
+                splits = np.split(idx_k, proportions)
+                
+                # 2. 将数据切片轮询分配给该类别的所有客户端
+                # clientidx_map[k] 中存储了所有拥有类别 k 的客户端索引
+                clients_for_k = clientidx_map[k]
+                
+                for i, split in enumerate(splits):
+                    # 使用取模运算进行轮询分配，彻底解决样本倾斜问题
+                    target_client = clients_for_k[i % len(clients_for_k)]
+                    idx_batch[target_client].extend(split.tolist())
+                
+                min_size = min([len(idx_j) for idx_j in idx_batch])
+                '''
                 if proportions[-1] != len(idx_k):
                     for w in range(clientidx_map[k][-1], num_clients-1):
                         proportions[w] = len(idx_k)
                 idx_batch = [idx_j + idx.tolist() for idx_j, idx in zip(idx_batch, np.split(idx_k, proportions))] 
                 min_size = min([len(idx_j) for idx_j in idx_batch])
+                '''
 
         for j in range(num_clients):
             np.random.shuffle(idx_batch[j])
