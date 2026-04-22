@@ -334,11 +334,28 @@ class Server(object):
         stats = self.test_metrics()
         stats_train = self.train_metrics()
 
-        test_acc = sum(stats[2])*1.0 / sum(stats[1])
-        test_auc = sum(stats[3])*1.0 / sum(stats[1])
-        train_loss = sum(stats_train[2])*1.0 / sum(stats_train[1])
-        accs = [a / n for a, n in zip(stats[2], stats[1])]
-        aucs = [a / n for a, n in zip(stats[3], stats[1])]
+        if sum(stats[1]) == 0:
+            test_acc = 0
+            test_auc = 0
+        else:
+            test_acc = sum(stats[2])*1.0 / sum(stats[1])
+            test_auc = sum(stats[3])*1.0 / sum(stats[1])
+        if sum(stats_train[1]) == 0:
+            train_loss = 0
+        else:
+            train_loss = sum(stats_train[2])*1.0 / sum(stats_train[1])
+        accs = []
+        for a, n in zip(stats[2], stats[1]):
+            if n == 0:
+                accs.append(0)
+            else:
+                accs.append(a / n)
+        aucs = []
+        for a, n in zip(stats[3], stats[1]):
+            if n == 0:
+                aucs.append(0)
+            else:
+                aucs.append(a / n)
         
         if acc == None:
             self.rs_test_acc.append(test_acc)
@@ -349,7 +366,6 @@ class Server(object):
             self.rs_train_loss.append(train_loss)
         else:
             loss.append(train_loss)
-        print("Current Learning Rate: {:.6f}".format(self.learning_rate)) 
         print("Averaged Train Loss: {:.4f}".format(train_loss))
         print("Averaged Test Accuracy: {:.4f}".format(test_acc))
         print("Averaged Test AUC: {:.4f}".format(test_auc))

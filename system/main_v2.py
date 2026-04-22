@@ -472,15 +472,15 @@ def run(args):
             # ★ 预训练权重在 BN→GN 替换之前加载，卷积权重能被保留
             has_pretrained = auto_load_pretrained(args.model, 'ResNet18', args)
 
-            # 替换 BN 为 GN (32 groups)
-            def replace_bn(module):
-                for name, child in module.named_children():
-                    if isinstance(child, nn.BatchNorm2d):
-                        setattr(module, name, nn.GroupNorm(32, child.num_features))
-                    else:
-                        replace_bn(child)
+            # [BNtoGN DISABLED]             # [BNtoGN DISABLED]             # 替换 BN 为 GN (32 groups)
+# [BNtoGN DISABLED]             def replace_bn(module):
+# [BNtoGN DISABLED]                 for name, child in module.named_children():
+# [BNtoGN DISABLED]                     if isinstance(child, nn.BatchNorm2d):
+# [BNtoGN DISABLED]                         setattr(module, name, nn.GroupNorm(32, child.num_features))
+# [BNtoGN DISABLED]                     else:
+# [BNtoGN DISABLED]                         replace_bn(child)
 
-            replace_bn(args.model)
+            # [BNtoGN DISABLED] replace_bn(args.model)
 
             # ══ SE 注意力注入（在 BN→GN 替换之后）═════════════════════
             att_type = getattr(args, 'attention', 'none')
@@ -548,19 +548,19 @@ def run(args):
             has_pretrained = auto_load_pretrained(args.model, 'MobileNet', args,
                                                   skip_keys=('fc', 'classifier'))
 
-            # 替换 BN 为 GN
-            def replace_bn(module):
-                for name, child in module.named_children():
-                    if isinstance(child, nn.BatchNorm2d):
-                        num_features = child.num_features
-                        num_groups = 8 if num_features % 8 == 0 else 4
-                        if num_features < num_groups:
-                            num_groups = 1
-                        setattr(module, name, nn.GroupNorm(num_groups, num_features))
-                    else:
-                        replace_bn(child)
+            # [BNtoGN DISABLED]             # [BNtoGN DISABLED]             # 替换 BN 为 GN
+# [BNtoGN DISABLED] # [BNtoGN DISABLED]             def replace_bn(module):
+# [BNtoGN DISABLED] # [BNtoGN DISABLED]                 for name, child in module.named_children():
+# [BNtoGN DISABLED] # [BNtoGN DISABLED]                     if isinstance(child, nn.BatchNorm2d):
+# [BNtoGN DISABLED] # [BNtoGN DISABLED]                         num_features = child.num_features
+# [BNtoGN DISABLED] # [BNtoGN DISABLED]                         num_groups = 8 if num_features % 8 == 0 else 4
+# [BNtoGN DISABLED] # [BNtoGN DISABLED]                         if num_features < num_groups:
+# [BNtoGN DISABLED] # [BNtoGN DISABLED]                             num_groups = 1
+# [BNtoGN DISABLED] # [BNtoGN DISABLED]                         setattr(module, name, nn.GroupNorm(num_groups, num_features))
+# [BNtoGN DISABLED] # [BNtoGN DISABLED]                     else:
+# [BNtoGN DISABLED] # [BNtoGN DISABLED]                         replace_bn(child)
 
-            replace_bn(args.model)
+            # [BNtoGN DISABLED] replace_bn(args.model)
 
             # ══ SE 注意力注入（在 BN→GN 替换之后）═════════════════════
             att_type = getattr(args, 'attention', 'none')
