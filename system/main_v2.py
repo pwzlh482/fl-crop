@@ -225,6 +225,63 @@ def load_pretrained_weights(model, pretrained_path, skip_keys=('fc', 'classifier
     return model
 
 
+def freeze_backbone(model, model_name, has_pretrained, freeze_enabled=True):
+    """冻结 backbone 浅层（当加载了预训练权重时）
+
+    仅在 has_pretrained=True 时才执行冻结，否则所有参数保持可训练。
+    这样 -pp 未指定 / 文件不存在 时不会误冻。
+
+    MobileNetV2: 冻结 features.0 ~ features.9（前两个 stage，浅层特征提取器）
+    ResNet18:    冻结 layer1（只学底层边缘纹理的 stage）
+    """
+    if not freeze_enabled or not has_pretrained:
+        return
+
+    print(f">>> [冻结] 开始冻结 {model_name} backbone 浅层...")
+
+    if model_name == 'MobileNet':
+        # MobileNetV2 features 是一个 Sequential，结构如下：
+        #   features.0  = Conv2d (stem，浅层)
+        #   features.1  = InvertedResidual (stage 1)
+        #   features.2  = InvertedResidual (stage 1)
+        #   features.3  = InvertedResidual (stage 2)
+        #   ...          ...
+        #   features.9  = InvertedResidual (stage 2，索引9是stage2最后一个)
+        #   features.10 = InvertedResidual (stage 3)
+        #   features.11 = InvertedResidual (stage 3)
+        #   features.12 = InvertedResidual (stage 4)
+        #   features.13 = InvertedResidual (stage 4，索引13是stage4最后一个)
+        # 冻结 stage 1-2（即 features.1 ~ features.9），保留 stem(features.0) 可微调
+        frozen_count = 0
+        trainable_count = 0
+        for name, param in model.named_parameters():
+            # 匹配 features.1 ~ features.9（stage 1 & 2）
+            if name.startswith('features.1') or name.startswith('features.2') or \
+               name.startswith('features.3') or name.startswith('features.4') or \
+               name.startswith('features.5') or name.startswith('features.6') or \
+               name.startswith('features.7') or name.startswith('features.8') or \
+               name.startswith('features.9'):
+                param.requires_grad = False
+                frozen_count += 1
+            else:
+                trainable_count += 1
+
+        print(f">>> [冻结] 已冻结 {frozen_count} 层，{trainable_count} 层可训练（classifier 保持训练）")
+
+    elif model_name == 'ResNet18':
+        frozen_count = 0
+        trainable_count = 0
+        for name, param in model.named_parameters():
+            # 冻结 layer1（底层纹理特征），保留 conv1 / layer2/3/4 可微调
+            if name.startswith('layer1'):
+                param.requires_grad = False
+                frozen_count += 1
+            else:
+                trainable_count += 1
+
+        print(f">>> [冻结] 已冻结 {frozen_count} 层，{trainable_count} 层可训练（fc 保持训练）")
+
+
 def auto_load_pretrained(model, model_name, args, skip_keys=('fc', 'classifier')):
     """自动检测并加载预训练权重
 
@@ -446,8 +503,11 @@ def run(args):
                     nn.init.normal_(m.weight, 0, 0.01)
                     nn.init.constant_(m.bias, 0)
 
-            # CIFAR10 / Crop 数据增强（含 ColorJitter + RandomErasing）
-            if "Cifar10" in args.dataset or "crop" in args.dataset.lower():
+            # ★ 预训练权重加载完毕后，有选择地冻结 backbone 浅层
+            freeze_backbone(args.model, 'ResNet18', has_pretrained)
+
+            # CIFAR10 数据增强（不含crop，crop是224x224用标准ImageNet normalize）
+            if "Cifar10" in args.dataset:
                 from torchvision import transforms
                 import utils.data_utils
 
@@ -523,8 +583,11 @@ def run(args):
                     nn.init.normal_(m.weight, 0, 0.01)
                     nn.init.constant_(m.bias, 0)
 
-            # 小图数据集适配
-            if "Cifar10" in args.dataset or "crop" in args.dataset.lower():
+            # ★ 预训练权重加载完毕后，有选择地冻结 backbone 浅层
+            freeze_backbone(args.model, 'MobileNet', has_pretrained)
+
+            # 小图数据集适配（仅针对CIFAR10 32x32，crop现在224x224不需要）
+            if "Cifar10" in args.dataset:
                 args.model.features[0][0].stride = (1, 1)
                 print(">>> [优化] 已修改第一层 Stride 为 1，防止小图特征丢失")
 
@@ -554,6 +617,40 @@ def run(args):
 
                 utils.data_utils.read_client_data = augmented_read_client_data
                 print(f">>> [V2增强] 已注入数据增强并统一 Resize 至 {img_size}x{img_size}")
+
+            elif "crop" in args.dataset.lower():
+                # crop数据集224x224，使用ImageNet标准化
+                # ★ 注意：read_client_data 返回 list[(tensor, label), ...]，没有 .transform
+                #   必须替换 process_image，在转 tensor 时直接归一化
+                import utils.data_utils
+                from torchvision import transforms
+
+                # ImageNet 标准化参数
+                _crop_mean = [0.485, 0.456, 0.406]
+                _crop_std = [0.229, 0.224, 0.225]
+
+                _normalize = transforms.Normalize(mean=_crop_mean, std=_crop_std)
+
+                # 保存原始 process_image
+                _original_process_image = utils.data_utils.process_image
+
+                def _crop_process_image(data):
+                    """替换版 process_image：对 crop 数据集做 ImageNet 归一化"""
+                    X = torch.Tensor(data['x']).type(torch.float32)  # (N, 3, 224, 224), 0~255
+                    y = torch.Tensor(data['y']).type(torch.int64)
+
+                    # 0~255 → 0~1
+                    X = X / 255.0
+
+                    # ImageNet Normalize: 逐样本应用
+                    result = []
+                    for x, label in zip(X, y):
+                        x = _normalize(x)  # (3, 224, 224)
+                        result.append((x, label))
+                    return result
+
+                utils.data_utils.process_image = _crop_process_image
+                print(">>> [Crop] 已应用 ImageNet 数据预处理")
 
             elif "MNIST" in args.dataset:
                 args.model.features[0][0] = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1, bias=False)
@@ -612,7 +709,7 @@ def run(args):
             raise NotImplementedError
 
         args.model = args.model
-        print(args.model)
+        print(f"[模型] {args.model_name} (num_classes={args.num_classes})")
 
         # select algorithm
         if args.algorithm == "FedAvg":
@@ -827,7 +924,7 @@ def main():
     parser.add_argument('-dev', "--device", type=str, default="cuda",
                         choices=["cpu", "cuda"])
     parser.add_argument('-did', "--device_id", type=str, default="0")
-    parser.add_argument('-data', "--dataset", type=str, default="Cifar10_100")
+    parser.add_argument('-data', "--dataset", type=str, default="Cifar10")
     parser.add_argument('-ncl', "--num_classes", type=int, default=10)
     parser.add_argument('-m', "--model", type=str, default="MobileNet")
     parser.add_argument('-lbs', "--batch_size", type=int, default=64)

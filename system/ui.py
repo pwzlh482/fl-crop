@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-联邦学习客户端协同训练平台 (V7 - 灵动渐变与逻辑优化版)
-- 修复：采用 QFrame 底板彻底解决 Windows 下背景全白的问题，实现黄绿渐变
-- 优化：整体色彩提亮（翠绿+亮黄），增加灵动感
-- 优化：全局轮次与 μ值 位置互换，且算法选择 FedAvg 时自动禁用 μ值
-- 优化：引入底部状态栏、帮助按钮，规范文字描述与按钮图标
+联邦学习客户端协同训练平台 (终极稳定版)
+- 修复核心Bug：彻底解决频繁点击开始/停止引发的 QThread 闪退问题（采用安全挂起与信号回调策略）
+- 优化：删除分类结果、模型加载及帮助文本中的所有小图标 (Emoji)
+- 优化：分类界面主标题修改为“农作物识别分类系统”
+- 优化：规范按钮状态流转，避免重复点击引发的并发冲突
 """
 
 import sys
@@ -37,109 +37,98 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 
 # ============================================================
-# 全局样式常量 — 灵动西农定制风格
+# 全局样式常量
 # ============================================================
 FONT_SIZE_LABEL = 13       
 FONT_SIZE_INPUT = 13       
+FONT_SIZE_TITLE = 34       
 FONT_SIZE_GROUP = 14       
 FONT_SIZE_BTN = 15         
 FONT_SIZE_LOG = 13         
 
-# 色彩提亮，显得更轻盈灵动
-NWAFU_GREEN = "#2A7240"  # 清新翠绿
-NWAFU_YELLOW = "#DCA728" # 明亮金黄
+NWAFU_GREEN = "#2E8B57"
+NWAFU_YELLOW = "#F39C12"
+TEXT_MAIN = "#2C3E50"
+
+BG_GRADIENT = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #F0F9F0, stop:1 #FFFDF2)"
 
 GLOBAL_STYLE = f"""
-/* 确保所有的背景由底板控制，不再受系统主题干扰 */
-QMainWindow {{ background-color: white; }}
-QWidget#central_widget {{ background: transparent; }}
+QMainWindow {{ background-color: #F0F9F0; }}
 
-/* 核心底板：完美的黄绿渐变 */
-QFrame#bg_frame {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #E8F5E9, stop:1 #FFFDE7);
-}}
+QWidget#central_widget {{ background: {BG_GRADIENT}; }}
 
 QGroupBox {{
     font-weight: bold; font-size: {FONT_SIZE_GROUP}px;
-    border: 1px solid rgba(42, 114, 64, 0.3);
+    border: 1px solid rgba(46, 139, 87, 0.3);
     border-radius: 8px;
     margin-top: 16px; padding-top: 15px; 
-    background-color: rgba(255, 255, 255, 0.65); /* 半透明白底，透出底板渐变 */
+    background-color: rgba(255, 255, 255, 0.75); 
 }}
 QGroupBox::title {{
     subcontrol-origin: margin; left: 15px;
     padding: 0 8px; color: {NWAFU_GREEN};
 }}
 
-/* 按钮通用样式 */
 QPushButton {{
     background-color: {NWAFU_GREEN}; color: white;
     border: none; padding: 10px 24px;
     border-radius: 6px; font-weight: bold;
     font-size: {FONT_SIZE_BTN}px; min-height: 25px;
 }}
-QPushButton:hover {{ background-color: #215c32; }}
-QPushButton:disabled {{ background-color: #a0b2a6; color: #f0f0f0; }}
+QPushButton:hover {{ background-color: #247146; }}
+QPushButton:disabled {{ background-color: #A0B2A6; color: #F0F0F0; }}
 
-/* 特定按钮样式 */
-QPushButton#stop_btn {{ background-color: #8B0000; }}
-QPushButton#stop_btn:hover {{ background-color: #A52A2A; }}
+QPushButton#stop_btn {{ background-color: #C0392B; }}
+QPushButton#stop_btn:hover {{ background-color: #A93226; }}
 
-QPushButton#clear_btn {{ background-color: #7f8c8d; }}
-QPushButton#clear_btn:hover {{ background-color: #95a5a6; }}
+QPushButton#clear_btn {{ background-color: #7F8C8D; }}
+QPushButton#clear_btn:hover {{ background-color: #616A6B; }}
 
-QPushButton#help_btn {{ background-color: #3498db; }}
-QPushButton#help_btn:hover {{ background-color: #2980b9; }}
+QPushButton#help_btn {{
+    background-color: #3498DB; padding: 5px 12px; 
+    font-size: 12px; border-radius: 4px; min-height: 15px;
+    margin-right: 15px;
+}}
+QPushButton#help_btn:hover {{ background-color: #2980B9; }}
 
 QPushButton#result_btn {{
     background-color: {NWAFU_YELLOW}; color: white;
     padding: 12px 30px; border-radius: 6px;
     font-size: {FONT_SIZE_BTN}px; font-weight: 900;
 }}
-QPushButton#result_btn:hover {{ background-color: #e3b642; }}
+QPushButton#result_btn:hover {{ background-color: #D68910; }}
 
-/* 下拉框样式 */
-QComboBox {{
-    padding: 5px 10px; border: 1px solid #A0B2A6;
+QComboBox, QLineEdit {{
+    padding: 5px 10px; border: 1px solid #BDC3C7;
     border-radius: 4px; background-color: white;
-    font-size: {FONT_SIZE_INPUT}px; min-width: 130px;
-    color: #2c3e50;
+    font-size: {FONT_SIZE_INPUT}px; min-width: 90px;
+    color: {TEXT_MAIN};
 }}
-QComboBox:hover {{ border: 1px solid {NWAFU_YELLOW}; }}
-QComboBox:disabled {{ background-color: #e9ecef; color: #6c757d; }}
+QComboBox:hover, QLineEdit:focus {{ border: 1px solid {NWAFU_GREEN}; }}
+QComboBox:disabled {{ background-color: #EAEDED; color: #95A5A6; }}
 QComboBox QAbstractItemView {{
-    background-color: white;
-    selection-background-color: #e8f5e9;
+    background-color: white; selection-background-color: #E8F5E9;
     selection-color: {NWAFU_GREEN};
 }}
 
-QLineEdit {{
-    padding: 5px 10px; border: 1px solid #A0B2A6;
-    border-radius: 4px; background-color: white;
-    font-size: {FONT_SIZE_INPUT}px; min-width: 90px;
-}}
-QLineEdit:focus {{ border: 1px solid {NWAFU_GREEN}; }}
+QLabel {{ color: {TEXT_MAIN}; font-size: {FONT_SIZE_LABEL}px; background: transparent; }}
 
-QLabel {{ color: #2c3e50; font-size: {FONT_SIZE_LABEL}px; background: transparent; }}
-
-/* 进度条 */
 QProgressBar {{
-    border: 1px solid rgba(42, 114, 64, 0.4);
+    border: 1px solid rgba(46, 139, 87, 0.4);
     border-radius: 6px; text-align: center;
-    background-color: rgba(255,255,255,0.8); color: #154326; font-weight: bold;
-    height: 20px;
+    background-color: rgba(255,255,255,0.9); color: {TEXT_MAIN}; font-weight: bold;
+    height: 22px;
 }}
 QProgressBar::chunk {{
-    background-color: {NWAFU_GREEN};
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2E8B57, stop:1 #3CB371);
     border-radius: 4px;
 }}
 
-/* 表格头 */
 QHeaderView::section {{
     background-color: {NWAFU_GREEN}; color: white;
-    font-weight: bold; padding: 8px; border: 1px solid #215c32;
+    font-weight: bold; padding: 8px; border: 1px solid #247146;
 }}
-QTableWidget {{ gridline-color: #d0d0d0; background: white; }}
+QTableWidget {{ gridline-color: #D0D0D0; background: white; }}
 """
 
 
@@ -173,12 +162,15 @@ class TrainingThread(QThread):
             for line in iter(self.process.stdout.readline, ''):
                 if not self.running: break
                 self.log_signal.emit(line.rstrip())
+            
+            # 等待进程完全结束
             self.process.wait()
             self.exit_code = self.process.returncode
         except Exception as e:
             self.log_signal.emit(f"[系统错误] {str(e)}")
             self.exit_code = 1
         finally:
+            # 必须等到进程死透了再发射完成信号，这样外面覆盖线程时才安全
             self.finished_signal.emit(self.exit_code)
 
     def stop(self):
@@ -193,9 +185,6 @@ class TrainingThread(QThread):
                 self.process.kill()
 
 
-# ============================================================
-# 结果窗口
-# ============================================================
 class ResultWindow(QMainWindow):
     def __init__(self, rounds_data, acc_data, loss_data, total_rounds,
                  config_info, auc_info=None, parent=None):
@@ -212,15 +201,7 @@ class ResultWindow(QMainWindow):
         central = QWidget()
         central.setObjectName("central_widget")
         self.setCentralWidget(central)
-        c_layout = QVBoxLayout(central)
-        c_layout.setContentsMargins(0, 0, 0, 0)
-
-        # 同样使用 bg_frame 确保背景渐变生效
-        bg_frame = QFrame()
-        bg_frame.setObjectName("bg_frame")
-        c_layout.addWidget(bg_frame)
-
-        main_layout = QVBoxLayout(bg_frame)
+        main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(20, 20, 20, 20)
 
         title = QLabel("训练结果综合评估")
@@ -235,14 +216,14 @@ class ResultWindow(QMainWindow):
         self.canvas = FigureCanvas(self.fig)
 
         self.ax.set_xlabel('Global Rounds', fontsize=11, labelpad=8)
-        self.ax.set_ylabel('Accuracy (%)', fontsize=11, color='#2A7240')
+        self.ax.set_ylabel('Accuracy (%)', fontsize=11, color='#2E8B57')
         self.ax.grid(True, alpha=0.3)
         self.ax2 = self.ax.twinx()
-        self.ax2.set_ylabel('Loss', fontsize=11, color='#DCA728')
+        self.ax2.set_ylabel('Loss', fontsize=11, color='#C0392B')
 
         if self.rounds_data:
-            self.ax.plot(self.rounds_data, self.acc_data, 'o-', color='#2A7240', label='Test Acc', linewidth=2, markersize=5)
-            self.ax2.plot(self.rounds_data, self.loss_data, 's-', color='#DCA728', label='Train Loss', linewidth=2, markersize=5)
+            self.ax.plot(self.rounds_data, self.acc_data, 'o-', color='#2E8B57', label='Test Acc', linewidth=2, markersize=5)
+            self.ax2.plot(self.rounds_data, self.loss_data, 's-', color='#C0392B', label='Train Loss', linewidth=2, markersize=5)
             total = max(self.total_rounds, max(self.rounds_data) + 1)
             self.ax.set_xlim(0, total)
             self.ax.set_ylim(0, max(100, max(self.acc_data) + 5) if self.acc_data else 100)
@@ -274,21 +255,22 @@ class ResultWindow(QMainWindow):
 
         main_layout.addLayout(chart_row, stretch=4)
 
-        config_group = QGroupBox("训练配置")
+        config_group = QGroupBox("训练配置存档")
         cfg_layout = QVBoxLayout()
         config_text = QTextEdit()
         config_text.setReadOnly(True)
         config_text.setMaximumHeight(100)
         lines = [f"• {k}: {v}" for k, v in self.config_info.items()]
         config_text.setText('\n'.join(lines))
-        config_text.setStyleSheet(f"background-color: white; color: {NWAFU_GREEN}; font-size: {FONT_SIZE_LABEL}px; border-radius: 4px; padding: 10px;")
+        config_text.setStyleSheet(f"background-color: white; color: {TEXT_MAIN}; font-size: {FONT_SIZE_LABEL}px; border-radius: 4px; padding: 10px;")
         cfg_layout.addWidget(config_text)
         config_group.setLayout(cfg_layout)
         main_layout.addWidget(config_group, stretch=1)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        save_btn = QPushButton("导出报告图片")
+        save_btn = QPushButton("导出数据与图表")
+        save_btn.setObjectName("result_btn")
         save_btn.clicked.connect(self.export_figure)
         btn_row.addWidget(save_btn)
         close_btn = QPushButton("关闭")
@@ -319,15 +301,12 @@ class ResultWindow(QMainWindow):
 
     def export_figure(self):
         default_path = os.path.join(os.path.expanduser("~"), "Desktop", f"training_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-        path, _ = QFileDialog.getSaveFileName(self, "保存图片", default_path, "PNG (*.png)")
+        path, _ = QFileDialog.getSaveFileName(self, "保存图表", default_path, "PNG (*.png)")
         if path:
             self.fig.savefig(path, dpi=200, bbox_inches='tight', facecolor='white')
-            QMessageBox.information(self, "成功", f"已保存至:\n{path}")
+            QMessageBox.information(self, "成功", f"图表已保存至:\n{path}")
 
 
-# ============================================================
-# 分类窗口
-# ============================================================
 class ClassifyWindow(QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -336,37 +315,31 @@ class ClassifyWindow(QMainWindow):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowTitle("农作物智能分类系统")
-        self.setGeometry(180, 100, 900, 650)
+        self.setWindowTitle("农作物识别分类系统")
+        self.setGeometry(180, 100, 950, 680)
         self.setStyleSheet(GLOBAL_STYLE)
 
         central = QWidget()
         central.setObjectName("central_widget")
         self.setCentralWidget(central)
-        c_layout = QVBoxLayout(central)
-        c_layout.setContentsMargins(0, 0, 0, 0)
-
-        bg_frame = QFrame()
-        bg_frame.setObjectName("bg_frame")
-        c_layout.addWidget(bg_frame)
-
-        main_layout = QVBoxLayout(bg_frame)
+        main_layout = QVBoxLayout(central)
         main_layout.setSpacing(15)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(25, 25, 25, 25)
 
-        title = QLabel("农作物智能分类与预测系统")
+        # 标题修改
+        title = QLabel("农作物识别分类系统")
         title.setStyleSheet(f"color: {NWAFU_GREEN}; font-size: 28px; font-weight: bold;")
         title.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(title)
 
-        top_bar = QGroupBox("1. 配置与上传")
+        top_bar = QGroupBox("1. 模型配置与图像上传")
         top_bar_layout = QHBoxLayout()
-        load_model_btn = QPushButton("加载模型 (.pt)")
+        load_model_btn = QPushButton("加载训练模型 (.pt)")
         load_model_btn.clicked.connect(self.on_load_model)
         top_bar_layout.addWidget(load_model_btn)
         
-        self.model_status = QLabel("模型: 未加载")
-        self.model_status.setStyleSheet("color: #8B0000; font-weight: bold;")
+        self.model_status = QLabel("当前模型: 未加载")
+        self.model_status.setStyleSheet("color: #C0392B; font-weight: bold;")
         top_bar_layout.addWidget(self.model_status)
         top_bar_layout.addSpacing(30)
         
@@ -374,8 +347,8 @@ class ClassifyWindow(QMainWindow):
         upload_btn.clicked.connect(self.on_select_image)
         top_bar_layout.addWidget(upload_btn)
         
-        self.image_status = QLabel("图片: 未选择")
-        self.image_status.setStyleSheet("color: #8B0000; font-weight: bold;")
+        self.image_status = QLabel("图片状态: 未选择")
+        self.image_status.setStyleSheet("color: #C0392B; font-weight: bold;")
         top_bar_layout.addWidget(self.image_status)
         
         top_bar_layout.addStretch()
@@ -383,12 +356,14 @@ class ClassifyWindow(QMainWindow):
         main_layout.addWidget(top_bar)
 
         content_layout = QHBoxLayout()
-        img_group = QGroupBox("2. 图像预览")
+        img_group = QGroupBox("2. 图像预览区")
         img_layout = QVBoxLayout()
-        self.result_img_label = QLabel("暂无图片")
+        
+        # 去掉占位图的小图标
+        self.result_img_label = QLabel("暂无图片\n请点击上方按钮上传")
         self.result_img_label.setAlignment(Qt.AlignCenter)
-        self.result_img_label.setMinimumSize(400, 400)
-        self.result_img_label.setStyleSheet("background-color: white; border: 1px dashed #A0B2A6; border-radius: 8px;")
+        self.result_img_label.setMinimumSize(420, 420)
+        self.result_img_label.setStyleSheet(f"background-color: white; border: 2px dashed {NWAFU_GREEN}; border-radius: 8px; color: #7F8C8D;")
         img_layout.addWidget(self.result_img_label)
         img_group.setLayout(img_layout)
         content_layout.addWidget(img_group, 1)
@@ -405,9 +380,9 @@ class ClassifyWindow(QMainWindow):
         self.result_text.setStyleSheet(f"""
             background-color: white; border: 2px solid {NWAFU_YELLOW}; 
             border-radius: 6px; font-size: {FONT_SIZE_LABEL + 2}px; 
-            color: {NWAFU_GREEN}; padding: 10px;
+            color: {TEXT_MAIN}; padding: 12px;
         """)
-        self.result_text.setPlaceholderText("预测结果将在此处详细展示...")
+        self.result_text.setPlaceholderText("推理结果、置信度以及耗时将在此处展示...")
         res_layout.addWidget(self.result_text)
         
         res_group.setLayout(res_layout)
@@ -432,7 +407,7 @@ class ClassifyWindow(QMainWindow):
                 from model_predict import parse_model_info_from_path, load_pytorch_model
                 dataset, model_str, acc = parse_model_info_from_path(path)
                 if not dataset: dataset, _ = QInputDialog.getText(self, "输入", "请输入数据集名称 (如 MNIST, Cifar10):")
-                if not model_str: model_str, _ = QInputDialog.getText(self, "输入", "请输入模型 (如 MobileNet):")
+                if not model_str: model_str, _ = QInputDialog.getText(self, "输入", "请输入模型 (默认 MobileNet):", text="MobileNet")
                 
                 num_classes = 10 if dataset in ['Cifar10', 'MNIST', 'Digit5'] else 6
                 self.loaded_model = load_pytorch_model(path, model_str, dataset, num_classes, self.device)
@@ -441,13 +416,14 @@ class ClassifyWindow(QMainWindow):
                 
                 self.model_status.setText(f"已加载: {model_str} ({dataset})")
                 self.model_status.setStyleSheet(f"color: {NWAFU_GREEN}; font-weight: bold;")
+                # 删除加载成功文本中的 Emoji
                 self.result_text.setPlainText(f"模型加载成功！\n\n网络: {model_str}\n数据集: {dataset}\n类型数: {num_classes}\n\n请点击上方开始预测。")
             except Exception as e:
-                QMessageBox.critical(self, "加载失败", str(e))
+                QMessageBox.critical(self, "加载失败", f"模型解析失败，请检查文件: {str(e)}")
 
     def on_classify(self):
         if not self.loaded_model or not self.image_path:
-            return QMessageBox.warning(self, "警告", "模型或图片尚未加载！")
+            return QMessageBox.warning(self, "警告", "请确保模型和待测图片均已加载！")
         try:
             image = Image.open(self.image_path).convert('L' if self.loaded_dataset == 'MNIST' else 'RGB')
             size, mean, std = ((28,28), (0.5,), (0.5,)) if self.loaded_dataset == 'MNIST' else ((32,32), (0.5,0.5,0.5), (0.5,0.5,0.5))
@@ -455,27 +431,29 @@ class ClassifyWindow(QMainWindow):
             
             with torch.no_grad():
                 out = self.loaded_model(transform(image).unsqueeze(0).to(self.device))
-                prob = torch.nn.functional.softmax(out, dim=1)
-                pred = torch.argmax(prob, dim=1).item()
-                conf = prob[0][pred].item()
+                prob = torch.nn.functional.softmax(out, dim=1)[0]
+                
+                k = min(3, len(prob)) 
+                topk_prob, topk_indices = torch.topk(prob, k)
             
-            cname = self.class_names[pred] if self.class_names else str(pred)
-            self.result_text.setPlainText(
-                f"预测完成！\n\n"
-                f"识别结果:  {cname}  (ID: {pred})\n"
-                f"置信度:  {conf:.2%}\n"
-                f"-----------------------------\n"
-                f"文件: {os.path.basename(self.image_path)}\n"
-                f"模型: {self.loaded_model_str}\n"
-                f"数据集: {self.loaded_dataset}"
-            )
+            # 删除推理结果展示中的 Emoji
+            res_str = "预测完成！\n\n【Top-3 预测结果】\n"
+            for i in range(k):
+                idx = topk_indices[i].item()
+                p = topk_prob[i].item()
+                cname = self.class_names[idx] if self.class_names else str(idx)
+                res_str += f"TOP-{i+1}: {cname} (ID: {idx})\n     置信度: {p:.2%}\n"
+                
+            res_str += f"\n-----------------------------\n"
+            res_str += f"文件: {os.path.basename(self.image_path)}\n"
+            res_str += f"模型: {self.loaded_model_str}\n"
+            res_str += f"数据集: {self.loaded_dataset}"
+            
+            self.result_text.setPlainText(res_str)
         except Exception as e:
-            QMessageBox.critical(self, "分类失败", str(e))
+            QMessageBox.critical(self, "分类推理失败", f"处理图像时发生错误: {str(e)}")
 
 
-# ============================================================
-# 主窗口
-# ============================================================
 class FedProxApp(QMainWindow):
 
     def __init__(self):
@@ -483,6 +461,7 @@ class FedProxApp(QMainWindow):
         self.training_thread, self.result_win, self.classify_win = None, None, None
         self.current_round, self.total_rounds, self.current_acc, self.current_loss = 0, 100, 0.0, 0.0
         self.training_failed = False
+        self.is_stopped_manually = False 
         self.collected_rounds, self.collected_accs, self.collected_losses = [], [], []
         self.auc_info = {}
 
@@ -491,27 +470,23 @@ class FedProxApp(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("联邦学习客户端协同训练平台")
-        self.setGeometry(100, 100, 1200, 780)
+        self.setGeometry(100, 80, 1080, 760)
         self.setStyleSheet(GLOBAL_STYLE)
 
-        # 核心修改：利用独立 QFrame 绑定渐变背景，解决白底 Bug
         central = QWidget()
         central.setObjectName("central_widget")
         self.setCentralWidget(central)
-        c_layout = QVBoxLayout(central)
-        c_layout.setContentsMargins(0, 0, 0, 0)
-
-        bg_frame = QFrame()
-        bg_frame.setObjectName("bg_frame")
-        c_layout.addWidget(bg_frame)
-
-        main = QVBoxLayout(bg_frame)
+        
+        main = QVBoxLayout(central)
         main.setSpacing(12)
-        main.setContentsMargins(25, 20, 25, 20)
+        main.setContentsMargins(25, 20, 25, 10) 
 
-        # ===== 标题与校徽 =====
-        title_layout = QHBoxLayout()
-        title_layout.addStretch()
+        # ===== 标题、校徽与帮助区 =====
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        
+        left_lyt = QHBoxLayout()
         self.logo_label = QLabel()
         script_dir = os.path.dirname(os.path.abspath(__file__))
         logo_paths = [os.path.join(script_dir, "nwafu_logo.png"), os.path.join(script_dir, "image_e9656f.png")]
@@ -519,24 +494,35 @@ class FedProxApp(QMainWindow):
         logo_loaded = False
         for path in logo_paths:
             if os.path.exists(path):
-                pixmap = QPixmap(path).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pixmap = QPixmap(path).scaled(75, 75, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.logo_label.setPixmap(pixmap)
                 logo_loaded = True
                 break
         if not logo_loaded:
-            self.logo_label.setText("") # 不显示冗余文字
+            self.logo_label.setText("") 
+            
+        left_lyt.addWidget(self.logo_label)
+        left_lyt.addStretch()
         
-        title_layout.addWidget(self.logo_label)
-        title_layout.addSpacing(15)
-
-        # 主标题使用明确大字号
         title = QLabel("联邦学习客户端协同训练平台")
-        title.setStyleSheet(f"color: {NWAFU_GREEN}; font-size: 32px; font-weight: bold; background: transparent;")
-        title_layout.addWidget(title)
-        title_layout.addStretch()
-        main.addLayout(title_layout)
+        title.setStyleSheet(f"color: {NWAFU_GREEN}; font-size: {FONT_SIZE_TITLE}px; font-weight: 900; background: transparent;")
+        title.setAlignment(Qt.AlignCenter)
+        
+        right_lyt = QHBoxLayout()
+        right_lyt.addStretch()
+        self.help_btn = QPushButton("使用帮助")
+        self.help_btn.setObjectName("help_btn")
+        self.help_btn.clicked.connect(self.show_help)
+        self.help_btn.setCursor(Qt.PointingHandCursor)
+        right_lyt.addWidget(self.help_btn)
 
-        # ===== 配置区 (逻辑调换) =====
+        header_layout.addLayout(left_lyt, 1)
+        header_layout.addWidget(title, 2)
+        header_layout.addLayout(right_lyt, 1)
+
+        main.addWidget(header_widget)
+
+        # ===== 配置区 =====
         cfg_grp = QGroupBox("训练参数配置")
         cfg_lyt = QVBoxLayout()
         row1 = QHBoxLayout()
@@ -547,16 +533,17 @@ class FedProxApp(QMainWindow):
 
         self.algo_combo = QComboBox()
         self.algo_combo.addItems(["FedProxV2", "FedProx", "FedAvg"])
-        self.algo_combo.currentTextChanged.connect(self.on_algo_changed) # 联动机制
+        self.algo_combo.currentTextChanged.connect(self.on_algo_changed) 
         left_form.addRow("聚合算法:", self.algo_combo)
 
         self.model_combo = QComboBox()
-        self.model_combo.addItems(["MobileNet", "ResNet18", "CNN", "DNN"])
+        self.model_combo.addItems(["MobileNet", "ResNet18", "CNN", "DNN"]) 
         left_form.addRow("网络模型:", self.model_combo)
 
         self.dataset_combo = QComboBox()
+        self.dataset_combo.setEditable(True)
         self.dataset_combo.addItems(["Cifar10", "MNIST"])
-        left_form.addRow("目标数据:", self.dataset_combo)
+        left_form.addRow("数据集:", self.dataset_combo)
 
         row1.addLayout(left_form, 1)
         row1.addSpacing(40)
@@ -565,63 +552,70 @@ class FedProxApp(QMainWindow):
         right_form.setSpacing(12)
         right_form.setLabelAlignment(Qt.AlignRight)
 
+        self.rounds_combo = QComboBox()
+        self.rounds_combo.setEditable(True)
+        self.rounds_combo.addItems(["50", "100", "200", "300"])
+        self.rounds_combo.setCurrentText("100")
+        right_form.addRow("全局轮次:", self.rounds_combo)
+
         self.clients_combo = QComboBox()
         self.clients_combo.setEditable(True)
         self.clients_combo.addItems(["1", "2", "5", "10"])
         self.clients_combo.setCurrentText("2")
         right_form.addRow("客户端数:", self.clients_combo)
 
-        self.lr_combo = QComboBox()
-        self.lr_combo.setEditable(True)
-        self.lr_combo.addItems(["0.01", "0.05", "0.1", "0.001"])
-        self.lr_combo.setCurrentText("0.05")
-        right_form.addRow("本地学习率:", self.lr_combo)
-
-        # [逻辑优化] 将全局轮次放到核心右侧区
-        self.rounds_input = QLineEdit("100")
-        self.rounds_input.setMinimumWidth(130)
-        right_form.addRow("全局轮次:", self.rounds_input)
+        self.join_ratio_combo = QComboBox()
+        self.join_ratio_combo.setEditable(True)
+        self.join_ratio_combo.addItems(["0.1", "0.5", "1.0"])
+        self.join_ratio_combo.setCurrentText("1")
+        right_form.addRow("参与率:", self.join_ratio_combo)
 
         row1.addLayout(right_form, 1)
         cfg_lyt.addLayout(row1)
 
-        # 第二行辅助参数
         row2 = QHBoxLayout()
-        row2.setSpacing(15)
+        row2.setSpacing(10)
         
-        # [逻辑优化] 将 u 值下放，并加上名称
-        row2.addWidget(QLabel("FedProx μ值:"))
+        def add_param_widget(layout, label_str, widget):
+            wrapper = QWidget()
+            l = QHBoxLayout(wrapper)
+            l.setContentsMargins(0, 0, 0, 0)
+            l.addWidget(QLabel(label_str))
+            l.addWidget(widget)
+            layout.addWidget(wrapper, stretch=1)
+
+        self.lr_combo = QComboBox()
+        self.lr_combo.setEditable(True)
+        self.lr_combo.addItems(["0.01", "0.05", "0.1", "0.001"])
+        self.lr_combo.setCurrentText("0.05")
+        add_param_widget(row2, "学习率:", self.lr_combo)
+
+        self.batch_combo = QComboBox()
+        self.batch_combo.setEditable(True)
+        self.batch_combo.addItems(["16", "32", "64", "128"])
+        self.batch_combo.setCurrentText("64")
+        add_param_widget(row2, "Batch Size:", self.batch_combo)
+
+        self.local_epochs_combo = QComboBox()
+        self.local_epochs_combo.setEditable(True)
+        self.local_epochs_combo.addItems(["1", "3", "5", "10"])
+        self.local_epochs_combo.setCurrentText("3")
+        add_param_widget(row2, "本地轮次:", self.local_epochs_combo)
+
+        self.device_combo = QComboBox()
+        add_param_widget(row2, "运行设备:", self.device_combo)
+
         self.mu_combo = QComboBox()
         self.mu_combo.setEditable(True)
         self.mu_combo.addItems(["0", "0.01", "0.1", "1.0"])
         self.mu_combo.setCurrentText("0.1")
-        self.mu_combo.setMinimumWidth(70)
-        row2.addWidget(self.mu_combo)
+        add_param_widget(row2, "FedProx μ值:", self.mu_combo)
 
-        row2.addWidget(QLabel("运行设备:"))
-        self.device_combo = QComboBox()
-        self.device_combo.setMinimumWidth(80)
-        row2.addWidget(self.device_combo)
-
-        for label, widget, width, d_val in [
-            ("Batch Size:", QLineEdit(), 60, "64"), 
-            ("本地轮次:", QLineEdit(), 60, "3"), 
-            ("参与率:", QLineEdit(), 60, "1")
-        ]:
-            row2.addWidget(QLabel(label))
-            if isinstance(widget, QLineEdit): widget.setText(d_val)
-            widget.setMinimumWidth(width)
-            row2.addWidget(widget)
-            if label == "Batch Size:": self.batch_input = widget
-            elif label == "本地轮次:": self.local_epochs_input = widget
-            elif label == "参与率:": self.join_ratio_input = widget
-
-        row2.addStretch()
         cfg_lyt.addLayout(row2)
         cfg_grp.setLayout(cfg_lyt)
         main.addWidget(cfg_grp)
 
-        # ===== 核心控制按钮 =====
+        # ===== 控制按钮 =====
         btn_row = QHBoxLayout()
         
         self.start_btn = QPushButton("开始训练")
@@ -639,27 +633,21 @@ class FedProxApp(QMainWindow):
         self.clear_btn.clicked.connect(self.clear_log)
         btn_row.addWidget(self.clear_btn)
 
-        # 新增帮助按钮
-        self.help_btn = QPushButton("❓ 使用帮助")
-        self.help_btn.setObjectName("help_btn")
-        self.help_btn.clicked.connect(self.show_help)
-        btn_row.addWidget(self.help_btn)
-
         btn_row.addStretch()
 
-        # 分离按钮，增加小图标 ➦
-        self.classify_btn = QPushButton("➦ 进入农作物分类系统")
+        self.classify_btn = QPushButton("👉 进入农作物分类系统")
         self.classify_btn.setObjectName("result_btn")
         self.classify_btn.clicked.connect(self.open_classify_window)
         btn_row.addWidget(self.classify_btn)
         
         main.addLayout(btn_row)
 
-        # ===== 进度指示区 =====
-        stat_grp = QGroupBox("训练状态")
+        # ===== 状态栏可视化反馈 =====
+        stat_grp = QGroupBox("训练状态监控")
         stat_lyt = QHBoxLayout()
+        
         self.status_label = QLabel("状态: 已就绪")
-        self.status_label.setStyleSheet(f"color: {NWAFU_GREEN}; font-weight:bold; font-size: 15px;")
+        self.status_label.setStyleSheet(f"color: {TEXT_MAIN}; font-weight:bold; font-size: 15px;")
         stat_lyt.addWidget(self.status_label)
         stat_lyt.addSpacing(30)
         
@@ -688,30 +676,27 @@ class FedProxApp(QMainWindow):
         self.log_text.setStyleSheet(f"""
             background-color: #0A1910; color: #F5E8C7; 
             padding: 10px; border-radius: 6px; font-family: 'Consolas', monospace;
-            font-size: {FONT_SIZE_LOG}px; border: 1px solid rgba(220, 167, 40, 0.4);
+            font-size: {FONT_SIZE_LOG}px; border: 1px solid rgba(243, 156, 18, 0.5);
         """)
         log_lyt.addWidget(self.log_text)
         log_grp.setLayout(log_lyt)
         main.addWidget(log_grp, stretch=1)
 
-        # 新增：底部状态栏
-        self.statusBar().showMessage(" 西北农林科技大学 | 联邦学习客户端协同训练平台 v1.0 | 仅供学术研究使用")
-        self.statusBar().setStyleSheet(f"color: #555; font-size: 12px; background: transparent;")
+        self.statusBar().showMessage(" 西北农林科技大学 | 联邦学习协同平台 v2.0 | 仅供学术研究使用")
+        self.statusBar().setStyleSheet(f"color: #7F8C8D; font-size: 12px; background: transparent;")
 
-        # 初始化调用联动
         self.on_algo_changed(self.algo_combo.currentText())
 
     def on_algo_changed(self, text):
-        """联动功能：非 FedProx 算法不需要 μ 值"""
         if text == "FedAvg":
             self.mu_combo.setEnabled(False)
             self.mu_combo.setToolTip("FedAvg算法无需近端项 μ 值")
         else:
             self.mu_combo.setEnabled(True)
-            self.mu_combo.setToolTip("")
+            self.mu_combo.setToolTip("非独立同分布(Non-IID)下的近端约束系数")
 
     def show_help(self):
-        """显示帮助说明"""
+        # 移除帮助文本中的所有图标和特殊符号格式
         help_text = (
             "【操作说明与参数释义】\n\n"
             "1. 聚合算法：\n"
@@ -749,7 +734,16 @@ class FedProxApp(QMainWindow):
     def parse_training_info(self, msg):
         try:
             flag = False
-            if re.search(r'(?:Traceback|Error|Exception|failed)', msg, re.IGNORECASE): self.training_failed = True
+            # 移除了诊断建议中的灯泡图标
+            if "CUDA out of memory" in msg:
+                self.training_failed = True
+                self.log_text.append(f"\n<span style='color:#E74C3C; font-weight:bold;'>诊断建议：GPU显存不足！请尝试减小 Batch Size。</span>\n")
+            elif "No such file or directory" in msg and ("data" in msg.lower() or "dataset" in msg.lower()):
+                self.training_failed = True
+                self.log_text.append(f"\n<span style='color:#E74C3C; font-weight:bold;'>诊断建议：找不到数据集，请检查数据集是否已下载或路径。</span>\n")
+            elif re.search(r'(?:Traceback|Error|Exception|failed)', msg, re.IGNORECASE): 
+                self.training_failed = True
+
             rm = re.search(r'Round\s*number:\s*(\d+)', msg, re.IGNORECASE)
             if rm:
                 self.current_round = int(rm.group(1))
@@ -789,10 +783,13 @@ class FedProxApp(QMainWindow):
     def start_training(self):
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.status_label.setText("状态: 训练运行中...")
-        self.status_label.setStyleSheet("color: #e67e22; font-weight:bold; font-size: 15px;")
+        self.status_label.setText("状态: 训练中...")
+        self.status_label.setStyleSheet("color: #D68910; font-weight:bold; font-size: 15px;")
+        
         self.training_failed, self.current_round, self.current_acc, self.current_loss = False, 0, 0.0, 0.0
-        self.total_rounds = int(self.rounds_input.text())
+        self.is_stopped_manually = False 
+        
+        self.total_rounds = int(self.rounds_combo.currentText())
         self.progress_bar.setValue(0)
         self.collected_rounds.clear(); self.collected_accs.clear(); self.collected_losses.clear()
 
@@ -800,43 +797,66 @@ class FedProxApp(QMainWindow):
         args = [
             sys.executable, os.path.join(script_dir, "main_v2.py"),
             "-algo", self.algo_combo.currentText(), "-m", self.model_combo.currentText(),
-            "-data", self.dataset_combo.currentText(), "-gr", self.rounds_input.text(),
+            "-data", self.dataset_combo.currentText(), "-gr", self.rounds_combo.currentText(),
             "-nc", self.clients_combo.currentText(), "-lr", self.lr_combo.currentText(),
-            "-lbs", self.batch_input.text(), "-dev", self.device_combo.currentText(),
-            "-ls", self.local_epochs_input.text(), "-jr", self.join_ratio_input.text(),
+            "-lbs", self.batch_combo.currentText(), "-dev", self.device_combo.currentText(),
+            "-ls", self.local_epochs_combo.currentText(), "-jr", self.join_ratio_combo.currentText(),
             "-eg", "1", "-mu", self.mu_combo.currentText(), "-fs", "0",
         ]
 
         self.config_info = {
             "聚合算法": self.algo_combo.currentText(), "网络模型": self.model_combo.currentText(),
-            "数据集": self.dataset_combo.currentText(), "全局通信轮次": self.rounds_input.text(),
+            "数据集": self.dataset_combo.currentText(), "全局通信轮次": self.rounds_combo.currentText(),
             "参与客户端": self.clients_combo.currentText(), "本地学习率": self.lr_combo.currentText(),
-            "FedProx μ值": self.mu_combo.currentText(), "Batch Size": self.batch_input.text(),
+            "FedProx μ值": self.mu_combo.currentText(), "Batch Size": self.batch_combo.currentText(),
         }
 
         self.append_log(f"启动命令: {' '.join(args)}")
+        
+        # 安全处理旧线程（防止连续点击重叠）
+        if self.training_thread and self.training_thread.isRunning():
+            self.training_thread.stop()
+            self.training_thread.wait()
+            
         self.training_thread = TrainingThread(args, script_dir)
         self.training_thread.log_signal.connect(self.append_log)
         self.training_thread.finished_signal.connect(self.training_finished)
         self.training_thread.start()
 
     def stop_training(self):
-        if self.training_thread: self.training_thread.stop(); self.training_thread = None
-        self.status_label.setText("状态: 手动终止")
-        self.status_label.setStyleSheet("color: #8B0000; font-weight:bold; font-size: 15px;")
-        self.start_btn.setEnabled(True); self.stop_btn.setEnabled(False)
-        self.append_log(">>> 已接收中断指令，停止训练过程。")
+        # 激活手动中断锁，并禁用开始按钮直到彻底结束
+        self.is_stopped_manually = True
+        self.stop_btn.setEnabled(False)
+        self.start_btn.setEnabled(False) # 防止在杀进程期间被再次启动
+        
+        self.status_label.setText("状态: 正在中断...")
+        self.status_label.setStyleSheet("color: #C0392B; font-weight:bold; font-size: 15px;")
+        self.append_log(">>> 正在发送中断指令，请稍候...")
+        
+        if self.training_thread: 
+            self.training_thread.stop()
+            # 核心修复点：切勿执行 self.training_thread = None !
+            # 必须等待底层 C++ 线程发出 finished_signal 信号安全回收
 
     def training_finished(self, exit_code):
-        self.start_btn.setEnabled(True); self.stop_btn.setEnabled(False)
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        
+        # 拦截手动终止的事件，只更新UI，不触发报错弹窗
+        if self.is_stopped_manually:
+            self.status_label.setText("状态: ⏸ 训练中断")
+            self.status_label.setStyleSheet("color: #C0392B; font-weight:bold; font-size: 15px;")
+            self.append_log(">>> ⏸ 训练已安全中断。")
+            return
+
         if self.training_failed or exit_code != 0:
-            self.status_label.setText("状态: 训练异常")
-            self.status_label.setStyleSheet("color: #8B0000; font-weight:bold; font-size: 15px;")
-            self.append_log("\n训练异常终止，请排查报错信息！")
+            self.status_label.setText("状态: ⚠️ 训练异常")
+            self.status_label.setStyleSheet("color: #C0392B; font-weight:bold; font-size: 15px;")
+            self.append_log("\n⚠️ 训练异常终止，请往上查看日志或修改配置重试。")
         else:
             self.status_label.setText("状态: 训练完成")
             self.status_label.setStyleSheet(f"color: {NWAFU_GREEN}; font-weight:bold; font-size: 15px;")
-            self.append_log("\n训练正常结束，即将展示评估报告...")
+            self.append_log("\n训练正常结束，即将展示评估报告图表...")
             self.progress_bar.setValue(100)
             QTimer.singleShot(800, self.open_result_window)
 
@@ -856,6 +876,9 @@ class FedProxApp(QMainWindow):
 
 
 def main():
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    
     app = QApplication(sys.argv)
     app.setStyle("Fusion") 
     window = FedProxApp()
